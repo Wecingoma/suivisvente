@@ -1,0 +1,69 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function profileDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function currentRole() {
+      return profileDoc().data != null && profileDoc().data.role != null
+        ? profileDoc().data.role
+        : request.auth.token.role;
+    }
+
+    function hasRole(roles) {
+      return isSignedIn() && currentRole() in roles;
+    }
+
+    match /users/{userId} {
+      allow read: if hasRole(['admin', 'gestionnaire']) || (isSignedIn() && request.auth.uid == userId);
+      allow create: if hasRole(['admin']) || (
+        isSignedIn() &&
+        request.auth.uid == userId &&
+        request.resource.data.role == 'vendeur'
+      );
+      allow update: if hasRole(['admin']) || (
+        isSignedIn() &&
+        request.auth.uid == userId &&
+        request.resource.data.role == resource.data.role
+      );
+      allow delete: if hasRole(['admin']);
+    }
+
+    match /clients/{docId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /products/{docId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /sales/{docId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /sale_items/{docId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /debts/{docId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /payments/{docId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /stock_movements/{docId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /audit_logs/{docId} {
+      allow read, write: if isSignedIn();
+    }
+  }
+}
