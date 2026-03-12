@@ -211,12 +211,6 @@ function App() {
 
       {mobileSidebarOpen ? (
         <div className="fixed inset-0 z-50 bg-slate-950/45 backdrop-blur-sm lg:hidden">
-          <button
-            type="button"
-            aria-label="Fermer le menu"
-            className="absolute inset-0"
-            onClick={() => setMobileSidebarOpen(false)}
-          />
           <aside className="absolute inset-y-0 left-0 flex w-[min(88vw,22rem)] flex-col border-r border-white/10 bg-slate-950 p-5 text-white shadow-[0_35px_90px_-60px_rgba(15,23,42,0.95)]">
             <div className="mb-4 flex items-center justify-between">
               <p className="text-sm uppercase tracking-[0.25em] text-cyan-300">
@@ -242,8 +236,8 @@ function App() {
         </div>
       ) : null}
 
-      <div className="flex min-h-svh flex-col lg:flex-row">
-        <aside className="hidden border-r border-white/10 bg-slate-950 text-white shadow-[0_35px_90px_-60px_rgba(15,23,42,0.95)] lg:flex lg:min-h-svh lg:w-80 lg:flex-col">
+      <div className="flex min-h-svh flex-col lg:block">
+        <aside className="hidden border-r border-white/10 bg-slate-950 text-white shadow-[0_35px_90px_-60px_rgba(15,23,42,0.95)] lg:fixed lg:inset-y-0 lg:left-0 lg:z-40 lg:flex lg:w-80 lg:flex-col">
           <SidebarContent
             currentUser={app.currentUser}
             availableNavigation={availableNavigation}
@@ -254,7 +248,7 @@ function App() {
           />
         </aside>
 
-        <section className="flex-1 space-y-6 px-4 py-4 lg:px-6 lg:py-6">
+        <section className="flex-1 space-y-6 px-4 py-4 lg:ml-80 lg:px-6 lg:py-6">
           <div className="flex items-center justify-between gap-3 lg:hidden">
             <Button
               variant="outline"
