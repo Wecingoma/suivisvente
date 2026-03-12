@@ -215,6 +215,12 @@ export function AuthScreen({
               password="seller123"
               onPick={() => onPickDemo("vendeur@marchervente.app", "seller123")}
             />
+            <DemoAccount
+              role="Client"
+              email="client@marchervente.app"
+              password="client123"
+              onPick={() => onPickDemo("client@marchervente.app", "client123")}
+            />
           </div>
         </section>
       </div>

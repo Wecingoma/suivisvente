@@ -19,51 +19,89 @@ service cloud.firestore {
       return isSignedIn() && currentRole() in roles;
     }
 
+    function isStaff() {
+      return hasRole(['admin', 'vendeur', 'gestionnaire']);
+    }
+
+    function currentClientId() {
+      return profileDoc().data != null && profileDoc().data.clientId != null
+        ? profileDoc().data.clientId
+        : null;
+    }
+
+    function authEmail() {
+      return request.auth.token.email != null ? request.auth.token.email : null;
+    }
+
+    function isClientLinkUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'clientId', 'updatedAt']) &&
+        request.resource.data.role == 'client';
+    }
+
     match /users/{userId} {
-      allow read: if hasRole(['admin', 'gestionnaire']) || (isSignedIn() && request.auth.uid == userId);
+      allow read: if hasRole(['admin', 'gestionnaire', 'vendeur']) || (isSignedIn() && request.auth.uid == userId);
       allow create: if hasRole(['admin']) || (
         isSignedIn() &&
         request.auth.uid == userId &&
-        request.resource.data.role == 'vendeur'
+        request.resource.data.role in ['vendeur', 'client']
       );
-      allow update: if hasRole(['admin']) || (
+      allow update: if hasRole(['admin']) ||
+        (hasRole(['vendeur', 'gestionnaire']) && isClientLinkUpdate()) || (
         isSignedIn() &&
         request.auth.uid == userId &&
-        request.resource.data.role == resource.data.role
+        request.resource.data.role == resource.data.role &&
+        request.resource.data.clientId == resource.data.clientId
       );
       allow delete: if hasRole(['admin']);
     }
 
     match /clients/{docId} {
-      allow read, write: if isSignedIn();
+      allow read: if isStaff() || (
+        isSignedIn() &&
+        (
+          (currentClientId() != null && docId == currentClientId()) ||
+          (authEmail() != null && resource.data.email == authEmail())
+        )
+      );
+      allow write: if isStaff();
     }
 
     match /products/{docId} {
-      allow read, write: if isSignedIn();
+      allow read, write: if isStaff();
     }
 
     match /sales/{docId} {
-      allow read, write: if isSignedIn();
+      allow read, write: if isStaff();
     }
 
     match /sale_items/{docId} {
-      allow read, write: if isSignedIn();
+      allow read, write: if isStaff();
     }
 
     match /debts/{docId} {
-      allow read, write: if isSignedIn();
+      allow read: if isStaff() || (
+        isSignedIn() &&
+        currentClientId() != null &&
+        resource.data.clientId == currentClientId()
+      );
+      allow write: if isStaff();
     }
 
     match /payments/{docId} {
-      allow read, write: if isSignedIn();
+      allow read: if isStaff() || (
+        isSignedIn() &&
+        currentClientId() != null &&
+        resource.data.clientId == currentClientId()
+      );
+      allow write: if isStaff();
     }
 
     match /stock_movements/{docId} {
-      allow read, write: if isSignedIn();
+      allow read, write: if isStaff();
     }
 
     match /audit_logs/{docId} {
-      allow read, write: if isSignedIn();
+      allow read, write: if isStaff();
     }
   }
 }

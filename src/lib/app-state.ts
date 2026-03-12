@@ -16,11 +16,15 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  getDocs,
+  limit,
   onSnapshot,
+  query,
   runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
   type DocumentData,
 } from "firebase/firestore"
 
@@ -160,6 +164,7 @@ function mapClientDoc(id: string, data: DocumentData): Client {
   return {
     id,
     fullName: String(data.fullName ?? ""),
+    email: typeof data.email === "string" ? data.email : undefined,
     phone: String(data.phone ?? ""),
     address: String(data.address ?? ""),
     notes: String(data.notes ?? ""),
@@ -275,9 +280,13 @@ function mapUserDoc(id: string, data: DocumentData): User {
     fullName: String(data.fullName ?? ""),
     email: String(data.email ?? ""),
     role:
-      data.role === "admin" || data.role === "gestionnaire" || data.role === "vendeur"
+      data.role === "admin" ||
+      data.role === "gestionnaire" ||
+      data.role === "vendeur" ||
+      data.role === "client"
         ? data.role
         : "vendeur",
+    clientId: typeof data.clientId === "string" && data.clientId ? data.clientId : undefined,
     isActive: data.isActive !== false,
     authProvider: data.authProvider === "google" ? "google" : "password",
     createdAt: asIsoString(data.createdAt),
@@ -335,7 +344,8 @@ function formatUsersCollectionIssue(currentUser: User | null, error: unknown) {
 function buildUserProfile(
   firebaseUser: FirebaseUser,
   role: UserRole,
-  fallbackFullName?: string
+  fallbackFullName?: string,
+  clientId?: string
 ): User {
   return {
     id: firebaseUser.uid,
@@ -346,6 +356,7 @@ function buildUserProfile(
       "Utilisateur",
     email: firebaseUser.email ?? "",
     role,
+    clientId,
     isActive: true,
     authProvider:
       firebaseUser.providerData[0]?.providerId === "google.com" ? "google" : "password",
@@ -360,6 +371,7 @@ async function persistUserProfile(profile: User) {
       email: profile.email,
       fullName: profile.fullName,
       role: profile.role,
+      clientId: profile.clientId ?? null,
       isActive: profile.isActive,
       authProvider: profile.authProvider ?? "password",
       createdAt: profile.createdAt,
@@ -375,15 +387,41 @@ async function syncUserProfile(firebaseUser: FirebaseUser): Promise<User> {
   const fallbackProfile = buildUserProfile(
     firebaseUser,
     fallbackRole,
-    fallbackUser?.fullName
+    fallbackUser?.fullName,
+    fallbackUser?.clientId
   )
+
+  async function resolveClientProfile() {
+    const email = firebaseUser.email?.trim().toLowerCase()
+    if (!email) {
+      return null
+    }
+
+    const snapshot = await getDocs(
+      query(
+        collection(db, "clients"),
+        where("email", "==", email),
+        limit(1)
+      )
+    )
+
+    const clientDoc = snapshot.docs[0]
+    if (!clientDoc) {
+      return null
+    }
+
+    return buildUserProfile(firebaseUser, "client", clientDoc.data().fullName, clientDoc.id)
+  }
 
   try {
     const snapshot = await getDoc(doc(db, "users", firebaseUser.uid))
 
     if (!snapshot.exists()) {
       try {
-        await persistUserProfile(fallbackProfile)
+        const clientProfile = await resolveClientProfile()
+        const nextProfile = clientProfile ?? fallbackProfile
+        await persistUserProfile(nextProfile)
+        return nextProfile
       } catch (error) {
         console.warn("Impossible d'enregistrer le profil Firestore.", error)
       }
@@ -391,7 +429,10 @@ async function syncUserProfile(firebaseUser: FirebaseUser): Promise<User> {
     }
 
     const data = snapshot.data()
-    const profile = {
+    const resolvedClientProfile =
+      (typeof data.clientId === "string" && data.clientId ? null : await resolveClientProfile())
+
+    const profile: User = {
       id: firebaseUser.uid,
       fullName:
         typeof data.fullName === "string"
@@ -402,9 +443,16 @@ async function syncUserProfile(firebaseUser: FirebaseUser): Promise<User> {
           ? data.email
           : fallbackProfile.email,
       role:
-        data.role === "admin" || data.role === "gestionnaire" || data.role === "vendeur"
+        data.role === "admin" ||
+        data.role === "gestionnaire" ||
+        data.role === "vendeur" ||
+        data.role === "client"
           ? data.role
-          : fallbackRole,
+          : resolvedClientProfile?.role ?? fallbackRole,
+      clientId:
+        typeof data.clientId === "string" && data.clientId
+          ? data.clientId
+          : resolvedClientProfile?.clientId ?? fallbackProfile.clientId,
       isActive: data.isActive !== false,
       authProvider: data.authProvider === "google" ? "google" : "password",
       createdAt:
@@ -478,84 +526,190 @@ export function useCommercialApp() {
       return
     }
 
-    const unsubscribers = [
-      onSnapshot(collection(db, firestoreCollections.clients), (snapshot) => {
+    const unsubscribers: Array<() => void> = []
+
+    if (currentUser.role === "client") {
+      if (currentUser.clientId) {
+        unsubscribers.push(
+          onSnapshot(doc(db, firestoreCollections.clients, currentUser.clientId), (snapshot) => {
+            setData((current) => ({
+              ...current,
+              clients: snapshot.exists() ? [mapClientDoc(snapshot.id, snapshot.data())] : [],
+            }))
+          })
+        )
+        unsubscribers.push(
+          onSnapshot(
+            query(
+              collection(db, firestoreCollections.debts),
+              where("clientId", "==", currentUser.clientId)
+            ),
+            (snapshot) => {
+              setData((current) => ({
+                ...current,
+                debts: snapshot.docs
+                  .map((entry) => mapDebtDoc(entry.id, entry.data()))
+                  .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
+              }))
+            }
+          )
+        )
+        unsubscribers.push(
+          onSnapshot(
+            query(
+              collection(db, firestoreCollections.payments),
+              where("clientId", "==", currentUser.clientId)
+            ),
+            (snapshot) => {
+              setData((current) => ({
+                ...current,
+                payments: snapshot.docs
+                  .map((entry) => mapPaymentDoc(entry.id, entry.data()))
+                  .sort((left, right) => right.paymentDate.localeCompare(left.paymentDate)),
+              }))
+            }
+          )
+        )
+      } else {
         setData((current) => ({
           ...current,
-          clients: snapshot.docs.map((entry) => mapClientDoc(entry.id, entry.data())),
+          clients: [],
+          products: [],
+          sales: [],
+          debts: [],
+          payments: [],
+          stockMovements: [],
+          auditLogs: [],
         }))
-      }),
-      onSnapshot(collection(db, firestoreCollections.users), (snapshot) => {
-        setUsersCollectionIssue(null)
-        setData((current) => ({
-          ...current,
-          users: snapshot.docs
-            .map((entry) => mapUserDoc(entry.id, entry.data()))
-            .sort((left, right) => left.fullName.localeCompare(right.fullName)),
-        }))
-      }, (error) => {
-        setUsersCollectionIssue(formatUsersCollectionIssue(currentUser, error))
-        setData((current) => ({ ...current, users: [] }))
-      }),
-      onSnapshot(collection(db, firestoreCollections.products), (snapshot) => {
-        setData((current) => ({
-          ...current,
-          products: snapshot.docs.map((entry) => mapProductDoc(entry.id, entry.data())),
-        }))
-      }),
-      onSnapshot(collection(db, firestoreCollections.sales), (snapshot) => {
-        setData((current) => ({
-          ...current,
-          sales: snapshot.docs
-            .map((entry) => mapSaleDoc(entry.id, entry.data()))
-            .sort((left, right) => right.saleDate.localeCompare(left.saleDate)),
-        }))
-      }),
-      onSnapshot(collection(db, firestoreCollections.debts), (snapshot) => {
-        setData((current) => ({
-          ...current,
-          debts: snapshot.docs
-            .map((entry) => mapDebtDoc(entry.id, entry.data()))
-            .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
-        }))
-      }),
-      onSnapshot(collection(db, firestoreCollections.payments), (snapshot) => {
-        setData((current) => ({
-          ...current,
-          payments: snapshot.docs
-            .map((entry) => mapPaymentDoc(entry.id, entry.data()))
-            .sort((left, right) => right.paymentDate.localeCompare(left.paymentDate)),
-        }))
-      }),
-      onSnapshot(
-        collection(db, firestoreCollections.stockMovements),
-        (snapshot) => {
+      }
+
+      unsubscribers.push(
+        onSnapshot(doc(db, firestoreCollections.users, currentUser.id), (snapshot) => {
+          setUsersCollectionIssue(null)
           setData((current) => ({
             ...current,
-            stockMovements: snapshot.docs
-              .map((entry) => mapStockMovementDoc(entry.id, entry.data()))
-              .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
+            users: snapshot.exists() ? [mapUserDoc(snapshot.id, snapshot.data())] : [],
           }))
-        },
-        () => {
-          setData((current) => ({ ...current, stockMovements: [] }))
-        }
-      ),
-      onSnapshot(
-        collection(db, firestoreCollections.auditLogs),
-        (snapshot) => {
+        }, (error) => {
+          setUsersCollectionIssue(formatUsersCollectionIssue(currentUser, error))
+          setData((current) => ({ ...current, users: [] }))
+        })
+      )
+    } else {
+      unsubscribers.push(
+        onSnapshot(collection(db, firestoreCollections.clients), (snapshot) => {
           setData((current) => ({
             ...current,
-            auditLogs: snapshot.docs
-              .map((entry) => mapAuditLogDoc(entry.id, entry.data()))
+            clients: snapshot.docs.map((entry) => mapClientDoc(entry.id, entry.data())),
+          }))
+        })
+      )
+
+      if (
+        currentUser.role === "admin" ||
+        currentUser.role === "gestionnaire" ||
+        currentUser.role === "vendeur"
+      ) {
+        unsubscribers.push(
+          onSnapshot(collection(db, firestoreCollections.users), (snapshot) => {
+            setUsersCollectionIssue(null)
+            setData((current) => ({
+              ...current,
+              users: snapshot.docs
+                .map((entry) => mapUserDoc(entry.id, entry.data()))
+                .sort((left, right) => left.fullName.localeCompare(right.fullName)),
+            }))
+          }, (error) => {
+            setUsersCollectionIssue(formatUsersCollectionIssue(currentUser, error))
+            setData((current) => ({ ...current, users: [] }))
+          })
+        )
+      } else {
+        unsubscribers.push(
+          onSnapshot(doc(db, firestoreCollections.users, currentUser.id), (snapshot) => {
+            setUsersCollectionIssue(null)
+            setData((current) => ({
+              ...current,
+              users: snapshot.exists() ? [mapUserDoc(snapshot.id, snapshot.data())] : [],
+            }))
+          }, (error) => {
+            setUsersCollectionIssue(formatUsersCollectionIssue(currentUser, error))
+            setData((current) => ({ ...current, users: [] }))
+          })
+        )
+      }
+
+      unsubscribers.push(
+        onSnapshot(collection(db, firestoreCollections.products), (snapshot) => {
+          setData((current) => ({
+            ...current,
+            products: snapshot.docs.map((entry) => mapProductDoc(entry.id, entry.data())),
+          }))
+        })
+      )
+      unsubscribers.push(
+        onSnapshot(collection(db, firestoreCollections.sales), (snapshot) => {
+          setData((current) => ({
+            ...current,
+            sales: snapshot.docs
+              .map((entry) => mapSaleDoc(entry.id, entry.data()))
+              .sort((left, right) => right.saleDate.localeCompare(left.saleDate)),
+          }))
+        })
+      )
+      unsubscribers.push(
+        onSnapshot(collection(db, firestoreCollections.debts), (snapshot) => {
+          setData((current) => ({
+            ...current,
+            debts: snapshot.docs
+              .map((entry) => mapDebtDoc(entry.id, entry.data()))
               .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
           }))
-        },
-        () => {
-          setData((current) => ({ ...current, auditLogs: [] }))
-        }
-      ),
-    ]
+        })
+      )
+      unsubscribers.push(
+        onSnapshot(collection(db, firestoreCollections.payments), (snapshot) => {
+          setData((current) => ({
+            ...current,
+            payments: snapshot.docs
+              .map((entry) => mapPaymentDoc(entry.id, entry.data()))
+              .sort((left, right) => right.paymentDate.localeCompare(left.paymentDate)),
+          }))
+        })
+      )
+      unsubscribers.push(
+        onSnapshot(
+          collection(db, firestoreCollections.stockMovements),
+          (snapshot) => {
+            setData((current) => ({
+              ...current,
+              stockMovements: snapshot.docs
+                .map((entry) => mapStockMovementDoc(entry.id, entry.data()))
+                .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
+            }))
+          },
+          () => {
+            setData((current) => ({ ...current, stockMovements: [] }))
+          }
+        )
+      )
+      unsubscribers.push(
+        onSnapshot(
+          collection(db, firestoreCollections.auditLogs),
+          (snapshot) => {
+            setData((current) => ({
+              ...current,
+              auditLogs: snapshot.docs
+                .map((entry) => mapAuditLogDoc(entry.id, entry.data()))
+                .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
+            }))
+          },
+          () => {
+            setData((current) => ({ ...current, auditLogs: [] }))
+          }
+        )
+      )
+    }
 
     return () => {
       unsubscribers.forEach((unsubscribe) => unsubscribe())
@@ -601,6 +755,7 @@ export function useCommercialApp() {
 
     if (
       syncedUser.role !== currentUser.role ||
+      syncedUser.clientId !== currentUser.clientId ||
       syncedUser.isActive !== currentUser.isActive ||
       syncedUser.fullName !== currentUser.fullName ||
       syncedUser.email !== currentUser.email
@@ -664,7 +819,8 @@ export function useCommercialApp() {
         fullName: fullName.trim(),
         email,
         password,
-        role: "vendeur",
+        role: "client",
+        clientId: undefined,
         isActive: true,
         authProvider: "password",
         createdAt: new Date().toISOString(),
@@ -686,7 +842,7 @@ export function useCommercialApp() {
       const credential = await createUserWithEmailAndPassword(auth, email, password)
       await updateProfile(credential.user, { displayName: fullName })
 
-      const profile = buildUserProfile(credential.user, "vendeur", fullName)
+      const profile = buildUserProfile(credential.user, "client", fullName)
 
       try {
         await persistUserProfile(profile)
@@ -729,11 +885,6 @@ export function useCommercialApp() {
     }
     setCurrentUser(null)
     setManageableUsers([])
-  }
-
-  async function fetchManageableUsers() {
-    setManageableUsers(data.users)
-    return data.users
   }
 
   function ensureAdminCanManageUsers() {
@@ -882,11 +1033,80 @@ export function useCommercialApp() {
     }
   }
 
+  async function syncClientUserLink(clientId: string, email?: string) {
+    const normalizedEmail = email?.trim().toLowerCase() ?? ""
+
+    if (useFirebaseAuth) {
+      const linkedUsersSnapshot = await getDocs(
+        query(collection(db, firestoreCollections.users), where("clientId", "==", clientId))
+      )
+
+      const targetUsersSnapshot = normalizedEmail
+        ? await getDocs(
+            query(collection(db, firestoreCollections.users), where("email", "==", normalizedEmail))
+          )
+        : null
+
+      const targetUserIds = new Set(
+        (targetUsersSnapshot?.docs ?? []).map((entry) => entry.id)
+      )
+
+      await Promise.all(
+        linkedUsersSnapshot.docs
+          .filter((entry) => !targetUserIds.has(entry.id))
+          .map((entry) =>
+            updateDoc(doc(db, firestoreCollections.users, entry.id), {
+              clientId: null,
+              updatedAt: serverTimestamp(),
+            })
+          )
+      )
+
+      if (!targetUsersSnapshot) {
+        return
+      }
+
+      await Promise.all(
+        targetUsersSnapshot.docs.map((entry) =>
+          updateDoc(doc(db, firestoreCollections.users, entry.id), {
+            role: "client",
+            clientId,
+            updatedAt: serverTimestamp(),
+          })
+        )
+      )
+      return
+    }
+
+    setData((current) => ({
+      ...current,
+      users: current.users.map((user) => {
+        const sameEmail = normalizedEmail && user.email.toLowerCase() === normalizedEmail
+        if (sameEmail) {
+          return { ...user, role: "client", clientId }
+        }
+
+        if (user.clientId === clientId) {
+          return { ...user, clientId: undefined }
+        }
+
+        return user
+      }),
+    }))
+  }
+
   function addClient(payload: Omit<Client, "id" | "createdAt">) {
     if (useFirebaseAuth) {
-      return addDoc(collection(db, firestoreCollections.clients), {
+      const normalizedPayload = {
         ...payload,
+        email: payload.email?.trim().toLowerCase() || undefined,
+      }
+
+      return addDoc(collection(db, firestoreCollections.clients), {
+        ...normalizedPayload,
         createdAt: new Date().toISOString(),
+      }).then(async (clientRef) => {
+        await syncClientUserLink(clientRef.id, normalizedPayload.email)
       })
     }
 
@@ -894,6 +1114,7 @@ export function useCommercialApp() {
       id: uuid("cl"),
       createdAt: new Date().toISOString(),
       ...payload,
+      email: payload.email?.trim().toLowerCase() || undefined,
     }
 
     setData((current) => ({
@@ -910,17 +1131,34 @@ export function useCommercialApp() {
         ...current.auditLogs,
       ],
     }))
+
+    void syncClientUserLink(client.id, client.email)
   }
 
   function updateClient(id: string, payload: Omit<Client, "id" | "createdAt">) {
     if (useFirebaseAuth) {
-      return updateDoc(doc(db, firestoreCollections.clients, id), payload)
+      const normalizedPayload = {
+        ...payload,
+        email: payload.email?.trim().toLowerCase() || undefined,
+      }
+
+      return updateDoc(doc(db, firestoreCollections.clients, id), normalizedPayload).then(
+        async () => {
+          await syncClientUserLink(id, normalizedPayload.email)
+        }
+      )
     }
 
     setData((current) => ({
       ...current,
       clients: current.clients.map((client) =>
-        client.id === id ? { ...client, ...payload } : client
+        client.id === id
+          ? {
+              ...client,
+              ...payload,
+              email: payload.email?.trim().toLowerCase() || undefined,
+            }
+          : client
       ),
       auditLogs: [
         appendAudit(
@@ -933,6 +1171,8 @@ export function useCommercialApp() {
         ...current.auditLogs,
       ],
     }))
+
+    void syncClientUserLink(id, payload.email)
   }
 
   function deleteClient(id: string) {
@@ -1289,6 +1529,12 @@ export function useCommercialApp() {
   function addPayment(input: PaymentInput) {
     if (!currentUser) {
       throw new Error("Utilisateur non connecte.")
+    }
+
+    if (currentUser.role === "client") {
+      throw new Error(
+        "Les paiements clients doivent etre confirmes par le backend et son webhook fournisseur."
+      )
     }
 
     const debt = data.debts.find((entry) => entry.id === input.debtId)

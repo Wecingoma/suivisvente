@@ -38,11 +38,22 @@ export const demoData: AppDataSnapshot = {
       isActive: true,
       createdAt: now,
     },
+    {
+      id: "usr-client",
+      fullName: "Esperance Kiala",
+      email: "client@marchervente.app",
+      password: "client123",
+      role: "client",
+      clientId: "cl-003",
+      isActive: true,
+      createdAt: now,
+    },
   ],
   clients: [
     {
       id: "cl-001",
       fullName: "Merveille Kanku",
+      email: "merveille.kanku@marchervente.app",
       phone: "+243 997 100 201",
       address: "Matete, Kinshasa",
       notes: "Cliente reguliere avec paiements mobiles.",
@@ -59,6 +70,7 @@ export const demoData: AppDataSnapshot = {
     {
       id: "cl-003",
       fullName: "Esperance Kiala",
+      email: "client@marchervente.app",
       phone: "+243 999 300 403",
       address: "Bandalungwa, Kinshasa",
       notes: "Dette active a suivre chaque semaine.",

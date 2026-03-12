@@ -11,6 +11,7 @@ import {
 import { StatBadge } from "@/components/app/shared"
 import {
   ClientsView,
+  ClientDashboardView,
   DashboardView,
   DebtsView,
   PaymentsView,
@@ -66,6 +67,10 @@ function App() {
     .filter((debt) => debt.status !== "paid")
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
     .slice(0, 5)
+  const currentClient =
+    app.currentUser?.role === "client" && app.currentUser.clientId
+      ? app.clients.find((client) => client.id === app.currentUser?.clientId)
+      : undefined
 
   function pushToast(type: ToastItem["type"], title: string, message: string) {
     const id = crypto.randomUUID()
@@ -311,41 +316,51 @@ function App() {
           ) : null}
 
           {screen === "dashboard" ? (
-            <DashboardView
-              currentUser={app.currentUser}
-              users={app.manageableUsers}
-              clients={app.clients}
-              products={app.products}
-              sales={app.sales}
-              payments={app.payments}
-              debts={app.debts}
-              debtors={dashboardDebtors}
-              auditLogs={app.auditLogs.slice(0, 8)}
-              onUpdateUserRole={async (userId, role) => {
-                try {
-                  await app.updateUserRole(userId, role)
-                  showSuccess("Role mis a jour", "Les acces du compte ont ete modifies.")
-                } catch (error) {
-                  showError(error)
-                }
-              }}
-              onToggleUserActive={async (userId, isActive) => {
-                try {
-                  await app.toggleUserActive(userId, isActive)
-                  showSuccess(
-                    isActive ? "Compte reactive" : "Compte desactive",
-                    "Le statut utilisateur a ete mis a jour."
-                  )
-                } catch (error) {
-                  showError(error)
-                }
-              }}
-            />
+            app.currentUser.role === "client" ? (
+              <ClientDashboardView
+                currentUser={app.currentUser}
+                client={currentClient}
+                debts={app.debts}
+                payments={app.payments}
+              />
+            ) : (
+              <DashboardView
+                currentUser={app.currentUser}
+                users={app.manageableUsers}
+                clients={app.clients}
+                products={app.products}
+                sales={app.sales}
+                payments={app.payments}
+                debts={app.debts}
+                debtors={dashboardDebtors}
+                auditLogs={app.auditLogs.slice(0, 8)}
+                onUpdateUserRole={async (userId, role) => {
+                  try {
+                    await app.updateUserRole(userId, role)
+                    showSuccess("Role mis a jour", "Les acces du compte ont ete modifies.")
+                  } catch (error) {
+                    showError(error)
+                  }
+                }}
+                onToggleUserActive={async (userId, isActive) => {
+                  try {
+                    await app.toggleUserActive(userId, isActive)
+                    showSuccess(
+                      isActive ? "Compte reactive" : "Compte desactive",
+                      "Le statut utilisateur a ete mis a jour."
+                    )
+                  } catch (error) {
+                    showError(error)
+                  }
+                }}
+              />
+            )
           ) : null}
 
           {screen === "clients" ? (
             <ClientsView
               clients={app.clients}
+              users={app.users}
               sales={app.sales}
               payments={app.payments}
               onCreate={async (payload) => {

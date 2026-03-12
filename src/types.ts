@@ -1,4 +1,4 @@
-export type UserRole = "admin" | "vendeur" | "gestionnaire"
+export type UserRole = "admin" | "vendeur" | "gestionnaire" | "client"
 
 export type PaymentType = "cash" | "credit" | "deposit"
 export type DebtStatus = "unpaid" | "partial" | "paid"
@@ -11,6 +11,7 @@ export interface User {
   email: string
   password?: string
   role: UserRole
+  clientId?: string
   isActive: boolean
   createdAt: string
   authProvider?: "password" | "google"
@@ -19,6 +20,7 @@ export interface User {
 export interface Client {
   id: string
   fullName: string
+  email?: string
   phone: string
   address: string
   notes: string
@@ -129,6 +131,31 @@ export interface PaymentInput {
   method: PaymentMethod
   reference: string
   note: string
+}
+
+export type ExternalPaymentProvider =
+  | "mobile_money_gateway"
+  | "card_gateway"
+  | "bank_gateway"
+
+export type PaymentIntentStatus =
+  | "pending"
+  | "processing"
+  | "confirmed"
+  | "failed"
+  | "cancelled"
+
+export interface ClientPaymentIntent {
+  id: string
+  clientId: string
+  debtId: string
+  amount: number
+  currency: string
+  provider: ExternalPaymentProvider
+  status: PaymentIntentStatus
+  providerReference: string
+  createdAt: string
+  confirmedAt?: string
 }
 
 export interface AppDataSnapshot {

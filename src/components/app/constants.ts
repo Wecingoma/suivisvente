@@ -31,7 +31,7 @@ export const navigation: NavItem[] = [
     id: "dashboard",
     label: "Dashboard",
     icon: LayoutDashboard,
-    roles: ["admin", "vendeur", "gestionnaire"],
+    roles: ["admin", "vendeur", "gestionnaire", "client"],
   },
   {
     id: "clients",

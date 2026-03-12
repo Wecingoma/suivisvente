@@ -35,6 +35,7 @@ import type {
   Client,
   Debt,
   DebtStatus,
+  Payment,
   PaymentInput,
   PaymentMethod,
   PaymentType,
@@ -289,6 +290,7 @@ export function DashboardView({
                           <option value="admin">Admin</option>
                           <option value="gestionnaire">Gestionnaire</option>
                           <option value="vendeur">Vendeur</option>
+                          <option value="client">Client</option>
                         </select>
                         <Button
                           type="button"
@@ -489,6 +491,243 @@ export function DashboardView({
   )
 }
 
+export function ClientDashboardView({
+  currentUser,
+  client,
+  debts,
+  payments,
+}: {
+  currentUser: User
+  client?: Client
+  debts: Debt[]
+  payments: Payment[]
+}) {
+  const totalDebt = debts.reduce((sum, debt) => sum + debt.initialAmount, 0)
+  const totalPaid = debts.reduce((sum, debt) => sum + debt.totalPaid, 0)
+  const remainingAmount = debts.reduce((sum, debt) => sum + debt.remainingAmount, 0)
+  const status =
+    debts.length === 0
+      ? "Aucune dette"
+      : remainingAmount <= 0
+        ? "Solde"
+        : debts.some((debt) => debt.status === "unpaid")
+          ? "Dette en cours"
+          : "Paiements partiels"
+  const debtCount = debts.length
+  const paymentCount = payments.length
+  const clientHistory = [
+    ...debts.map((debt) => ({
+      id: `debt-${debt.id}`,
+      kind: "debt" as const,
+      date: debt.createdAt,
+      title: `Dette ${debt.id.slice(0, 8).toUpperCase()}`,
+      subtitle: `Echeance ${formatDate(debt.dueDate)}`,
+      amount: debt.initialAmount,
+      statusLabel: debtLabels[debt.status],
+      details: `Total paye ${formatCurrency(debt.totalPaid)} · Reste ${formatCurrency(
+        debt.remainingAmount
+      )}`,
+    })),
+    ...payments.map((payment) => ({
+      id: `payment-${payment.id}`,
+      kind: "payment" as const,
+      date: payment.createdAt || payment.paymentDate,
+      title: `Paiement ${payment.id.slice(0, 8).toUpperCase()}`,
+      subtitle: `${paymentMethodLabels[payment.method]} · ${formatDate(payment.paymentDate)}`,
+      amount: payment.amount,
+      statusLabel: "Confirme",
+      details: `Reference ${payment.reference || "Aucune"} · Saisi par ${
+        payment.createdBy || "Systeme"
+      }`,
+    })),
+  ].sort((left, right) => right.date.localeCompare(left.date))
+
+  return (
+    <div className="grid gap-6">
+      <SectionCard
+        title={`Espace client${client?.fullName ? ` - ${client.fullName}` : ""}`}
+        subtitle="Vue personnelle de votre dette, de vos paiements et du solde restant."
+      >
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <MiniReportCard label="Dette totale" value={formatCurrency(totalDebt)} />
+          <MiniReportCard label="Total paye" value={formatCurrency(totalPaid)} />
+          <MiniReportCard label="Reste a payer" value={formatCurrency(remainingAmount)} />
+          <MiniReportCard label="Statut" value={status} />
+        </div>
+      </SectionCard>
+
+      {!currentUser.clientId ? (
+        <EmptyState text="Ce compte client n'est pas encore relie a un document clients/{clientId}." />
+      ) : null}
+
+      <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+        <SectionCard
+          title="Informations du client"
+          subtitle="Fiche complete du client relie a ce compte utilisateur."
+        >
+          {client ? (
+            <div className="grid gap-4">
+              <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-5">
+                <p className="text-xl font-semibold text-slate-900">{client.fullName}</p>
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <MiniMetric
+                    label="Email du client"
+                    value={client.email || currentUser.email || "Non renseigne"}
+                  />
+                  <MiniMetric label="Telephone" value={client.phone || "Non renseigne"} />
+                  <MiniMetric label="Adresse" value={client.address || "Non renseignee"} />
+                  <MiniMetric label="Compte relie" value={currentUser.email} />
+                </div>
+                <div className="mt-4 rounded-[1.25rem] bg-slate-100 p-4">
+                  <p className="text-sm text-slate-500">Notes</p>
+                  <p className="mt-2 text-sm leading-7 text-slate-700">
+                    {client.notes || "Aucune note pour ce client."}
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-3">
+                <MiniReportCard label="Dettes" value={String(debtCount)} />
+                <MiniReportCard label="Paiements" value={String(paymentCount)} />
+                <MiniReportCard
+                  label="Client relie"
+                  value={currentUser.clientId ? "Oui" : "Non"}
+                />
+              </div>
+            </div>
+          ) : (
+            <EmptyState text="Aucune fiche client detaillee n'est actuellement reliee a ce compte." />
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="Dettes"
+          subtitle="Etat de vos dettes liees a votre compte client."
+        >
+          <div className="grid gap-3">
+            {debts.length ? (
+              debts.map((debt) => (
+                <div
+                  key={debt.id}
+                  className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4"
+                >
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="font-semibold text-slate-900">
+                        Dette {debt.id.slice(0, 8).toUpperCase()}
+                      </p>
+                      <p className="text-sm text-slate-500">
+                        Echeance {formatDate(debt.dueDate)}
+                      </p>
+                    </div>
+                    <span
+                      className={`rounded-full px-3 py-1 text-xs font-semibold ${statusClasses(
+                        debt.status
+                      )}`}
+                    >
+                      {debtLabels[debt.status]}
+                    </span>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 md:grid-cols-3">
+                    <MiniMetric label="Montant initial" value={formatCurrency(debt.initialAmount)} />
+                    <MiniMetric label="Total paye" value={formatCurrency(debt.totalPaid)} />
+                    <MiniMetric label="Reste" value={formatCurrency(debt.remainingAmount)} />
+                  </div>
+                </div>
+              ))
+            ) : (
+              <EmptyState text="Aucune dette rattachee a ce compte client." />
+            )}
+          </div>
+        </SectionCard>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+        <SectionCard
+          title="Historique des paiements"
+          subtitle="Paiements confirmes et synchronises dans l'application."
+        >
+          <div className="grid gap-3">
+            {payments.length ? (
+              payments.map((payment) => (
+                <div
+                  key={payment.id}
+                  className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4"
+                >
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="font-semibold text-slate-900">
+                        {formatCurrency(payment.amount)}
+                      </p>
+                      <p className="text-sm text-slate-500">
+                        {paymentMethodLabels[payment.method]} le {formatDate(payment.paymentDate)}
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-cyan-100 px-3 py-1 text-xs font-semibold text-cyan-800">
+                      Confirme
+                    </span>
+                  </div>
+                  <p className="mt-3 text-sm text-slate-500">
+                    Reference: {payment.reference || "Aucune"}.
+                  </p>
+                </div>
+              ))
+            ) : (
+              <EmptyState text="Aucun paiement confirme pour ce compte client." />
+            )}
+          </div>
+        </SectionCard>
+
+        <SectionCard
+          title="Historique complet"
+          subtitle="Chronologie des dettes et paiements lies a ce client."
+        >
+          <div className="grid gap-3">
+            {clientHistory.length ? (
+              clientHistory.map((entry) => (
+                <div
+                  key={entry.id}
+                  className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4"
+                >
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="font-semibold text-slate-900">{entry.title}</p>
+                      <p className="text-sm text-slate-500">{entry.subtitle}</p>
+                    </div>
+                    <div className="text-left md:text-right">
+                      <p className="font-semibold text-slate-900">
+                        {formatCurrency(entry.amount)}
+                      </p>
+                      <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                        {formatDateTime(entry.date)}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <span
+                      className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                        entry.kind === "debt"
+                          ? "bg-amber-100 text-amber-800"
+                          : "bg-cyan-100 text-cyan-800"
+                      }`}
+                    >
+                      {entry.statusLabel}
+                    </span>
+                    <p className="text-sm text-slate-500">{entry.details}</p>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <EmptyState text="Aucun historique disponible pour ce client." />
+            )}
+          </div>
+        </SectionCard>
+      </div>
+    </div>
+  )
+}
+
 function DashboardStatCard({
   label,
   value,
@@ -511,6 +750,7 @@ function DashboardStatCard({
 
 export function ClientsView({
   clients,
+  users,
   sales,
   payments,
   onCreate,
@@ -518,6 +758,7 @@ export function ClientsView({
   onDelete,
 }: {
   clients: Client[]
+  users: User[]
   sales: {
     id: string
     clientId: string
@@ -551,10 +792,14 @@ export function ClientsView({
   )
   const [form, setForm] = useState({
     fullName: "",
+    email: "",
     phone: "",
     address: "",
     notes: "",
   })
+  const userEmailOptions = [...users]
+    .filter((user) => Boolean(user.email))
+    .sort((left, right) => left.email.localeCompare(right.email))
 
   const clientSummaries = clients
     .map((client) => {
@@ -575,7 +820,7 @@ export function ClientsView({
       isDebtor: entry.totalRemaining > 0,
     }))
     .filter((entry) => {
-      const matchesSearch = `${entry.client.fullName} ${entry.client.phone} ${entry.client.address}`
+      const matchesSearch = `${entry.client.fullName} ${entry.client.email ?? ""} ${entry.client.phone} ${entry.client.address}`
         .toLowerCase()
         .includes(search.toLowerCase())
 
@@ -648,6 +893,7 @@ export function ClientsView({
     setEditingId(null)
     setForm({
       fullName: "",
+      email: "",
       phone: "",
       address: "",
       notes: "",
@@ -693,6 +939,31 @@ export function ClientsView({
             <Field label="Nom complet">
               <input className="h-11 rounded-2xl border border-slate-200 bg-slate-50 px-4 outline-none focus:border-cyan-500" value={form.fullName} onChange={(event) => setForm((current) => ({ ...current, fullName: event.target.value }))} required />
             </Field>
+            <Field label="Email du client">
+              <input
+                type="email"
+                className="h-11 rounded-2xl border border-slate-200 bg-slate-50 px-4 outline-none focus:border-cyan-500"
+                value={form.email}
+                onChange={(event) => setForm((current) => ({ ...current, email: event.target.value.toLowerCase() }))}
+                placeholder="client@example.com"
+              />
+            </Field>
+            <Field label="Associer un email utilisateur existant">
+              <select
+                className="h-11 rounded-2xl border border-slate-200 bg-slate-50 px-4 outline-none focus:border-cyan-500"
+                value={form.email}
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, email: event.target.value }))
+                }
+              >
+                <option value="">Aucun compte associe pour le moment</option>
+                {userEmailOptions.map((user) => (
+                  <option key={user.id} value={user.email}>
+                    {user.email} - {user.fullName} ({user.role})
+                  </option>
+                ))}
+              </select>
+            </Field>
             <Field label="Telephone">
               <input className="h-11 rounded-2xl border border-slate-200 bg-slate-50 px-4 outline-none focus:border-cyan-500" value={form.phone} onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))} required />
             </Field>
@@ -702,6 +973,10 @@ export function ClientsView({
             <Field label="Notes">
               <textarea className="min-h-28 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none focus:border-cyan-500" value={form.notes} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} />
             </Field>
+            <p className="text-sm leading-6 text-slate-500">
+              Si un compte Firebase Auth existe deja ou sera cree plus tard avec ce meme email,
+              il pourra etre associe automatiquement a ce client pour suivre l'evolution de sa dette.
+            </p>
             <div className="flex flex-wrap gap-3">
               <Button type="submit" className="rounded-2xl bg-slate-950 px-5 text-white hover:bg-slate-900">{editingId ? "Mettre a jour" : "Ajouter"}</Button>
               <Button type="button" variant="outline" className="rounded-2xl px-5" onClick={resetForm}>Reinitialiser</Button>
@@ -714,7 +989,7 @@ export function ClientsView({
         <SectionCard title="Base clients" subtitle="Consulter, chercher et ouvrir un historique client.">
           <div className="mb-4 flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4">
             <Search className="h-4 w-4 text-slate-400" />
-            <input className="h-11 w-full bg-transparent outline-none" placeholder="Rechercher par nom ou telephone" value={search} onChange={(event) => setSearch(event.target.value)} />
+            <input className="h-11 w-full bg-transparent outline-none" placeholder="Rechercher par nom, email ou telephone" value={search} onChange={(event) => setSearch(event.target.value)} />
           </div>
 
           <div className="mb-4 flex flex-wrap gap-3">
@@ -748,6 +1023,9 @@ export function ClientsView({
                           {entry.isDebtor ? "Debiteur" : "A jour"}
                         </span>
                       </div>
+                      {client.email ? (
+                        <p className="break-all text-sm text-cyan-700">{client.email}</p>
+                      ) : null}
                       <p className="break-all text-sm text-slate-500">{client.phone}</p>
                       <p className="mt-1 break-words text-sm text-slate-600">{client.address}</p>
                       <div className="mt-2 grid gap-1 text-xs text-slate-500 sm:flex sm:flex-wrap sm:gap-3">
@@ -758,7 +1036,7 @@ export function ClientsView({
                       </div>
                     </div>
                     <div className="grid w-full gap-2 sm:w-auto sm:grid-cols-2">
-                      <Button type="button" size="sm" variant="outline" className="w-full" onClick={(event) => { event.stopPropagation(); setEditingId(client.id); setForm({ fullName: client.fullName, phone: client.phone, address: client.address, notes: client.notes }) }}>Modifier</Button>
+                      <Button type="button" size="sm" variant="outline" className="w-full" onClick={(event) => { event.stopPropagation(); setEditingId(client.id); setForm({ fullName: client.fullName, email: client.email ?? "", phone: client.phone, address: client.address, notes: client.notes }) }}>Modifier</Button>
                       <Button type="button" size="sm" variant="destructive" className="w-full" onClick={(event) => { event.stopPropagation(); onDelete(client.id) }}>Supprimer</Button>
                     </div>
                   </div>
@@ -773,6 +1051,13 @@ export function ClientsView({
             <div className="grid gap-4">
               <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
                 <p className="text-lg font-semibold">{selectedClient.fullName}</p>
+                {selectedClient.email ? (
+                  <p className="break-all text-sm text-cyan-700">{selectedClient.email}</p>
+                ) : (
+                  <p className="text-sm text-slate-400">
+                    Aucun email lie pour l'association a un compte utilisateur.
+                  </p>
+                )}
                 <p className="break-all text-sm text-slate-500">{selectedClient.phone}</p>
                 <p className="mt-2 break-words text-sm leading-7 text-slate-600">{selectedClient.notes || "Aucune note"}</p>
               </div>
