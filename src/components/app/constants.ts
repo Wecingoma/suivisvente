@@ -12,6 +12,9 @@ import type { DebtStatus, PaymentMethod, PaymentType, UserRole } from "@/types"
 
 export type ScreenId =
   | "dashboard"
+  | "businesses"
+  | "platform_users"
+  | "subscriptions"
   | "clients"
   | "products"
   | "sales"
@@ -31,48 +34,69 @@ export const navigation: NavItem[] = [
     id: "dashboard",
     label: "Dashboard",
     icon: LayoutDashboard,
-    roles: ["admin", "vendeur", "gestionnaire", "client"],
+    roles: ["super_admin", "owner", "manager", "seller", "admin", "vendeur", "gestionnaire", "client"],
+  },
+  {
+    id: "businesses",
+    label: "Entreprises",
+    icon: Users,
+    roles: ["super_admin"],
+  },
+  {
+    id: "platform_users",
+    label: "Utilisateurs",
+    icon: Users,
+    roles: ["super_admin"],
+  },
+  {
+    id: "subscriptions",
+    label: "Abonnements",
+    icon: CreditCard,
+    roles: ["super_admin"],
   },
   {
     id: "clients",
     label: "Clients",
     icon: Users,
-    roles: ["admin", "vendeur", "gestionnaire"],
+    roles: ["owner", "manager", "seller", "admin", "vendeur", "gestionnaire"],
   },
   {
     id: "products",
     label: "Produits",
     icon: Boxes,
-    roles: ["admin", "gestionnaire"],
+    roles: ["owner", "manager", "admin", "gestionnaire"],
   },
   {
     id: "sales",
     label: "Ventes",
     icon: ShoppingCart,
-    roles: ["admin", "vendeur", "gestionnaire"],
+    roles: ["owner", "manager", "seller", "admin", "vendeur", "gestionnaire"],
   },
   {
     id: "debts",
     label: "Dettes",
     icon: Wallet,
-    roles: ["admin", "gestionnaire"],
+    roles: ["owner", "manager", "admin", "gestionnaire"],
   },
   {
     id: "payments",
     label: "Paiements",
     icon: CreditCard,
-    roles: ["admin", "vendeur", "gestionnaire"],
+    roles: ["owner", "manager", "seller", "admin", "vendeur", "gestionnaire"],
   },
   {
     id: "reports",
     label: "Rapports",
     icon: FileSpreadsheet,
-    roles: ["admin", "gestionnaire"],
+    roles: ["owner", "manager", "admin", "gestionnaire"],
   },
 ]
 
 export const screenTitles: Record<ScreenId, string> = {
   dashboard: "Vue generale",
+  businesses: "Administration des entreprises",
+  platform_users: "Utilisateurs plateforme",
+  subscriptions: "Administration des abonnements",
   clients: "Gestion des clients",
   products: "Gestion des produits",
   sales: "Enregistrement des ventes",

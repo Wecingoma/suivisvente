@@ -37,17 +37,30 @@ import {
 import { demoData } from "@/lib/demo-data"
 import { auth, db, googleProvider } from "@/lib/firebase"
 import { todayIsoDate } from "@/lib/format"
+import { resolveUserBusinessId } from "@/lib/multitenant"
+import {
+  canManageUsers,
+  canReadUsersCollection,
+  getAssignableRolesForActor,
+  isClientRole,
+  isProtectedAdminRole,
+  normalizeRole,
+} from "@/lib/roles"
 import type {
   AppDataSnapshot,
+  Business,
   Client,
   Debt,
   Payment,
   PaymentInput,
+  Plan,
   Product,
   Sale,
   SaleInput,
   SaleItem,
   StockMovement,
+  Subscription,
+  SubscriptionPayment,
   User,
   UserRole,
 } from "@/types"
@@ -65,6 +78,10 @@ const firestoreCollections = {
   auditLogs: "audit_logs",
   saleItems: "sale_items",
   users: "users",
+  businesses: "businesses",
+  plans: "plans",
+  subscriptions: "subscriptions",
+  subscriptionPayments: "subscription_payments",
 } as const
 
 function cloneSnapshot(snapshot: AppDataSnapshot): AppDataSnapshot {
@@ -124,6 +141,10 @@ function buildInitialSnapshot() {
           payments: [],
           stockMovements: [],
           auditLogs: [],
+          businesses: [],
+          plans: [],
+          subscriptions: [],
+          subscriptionPayments: [],
         }
       : demoData
   )
@@ -163,6 +184,8 @@ function asIsoString(value: unknown) {
 function mapClientDoc(id: string, data: DocumentData): Client {
   return {
     id,
+    businessId:
+      typeof data.businessId === "string" && data.businessId ? data.businessId : undefined,
     fullName: String(data.fullName ?? ""),
     email: typeof data.email === "string" ? data.email : undefined,
     phone: String(data.phone ?? ""),
@@ -175,6 +198,8 @@ function mapClientDoc(id: string, data: DocumentData): Client {
 function mapProductDoc(id: string, data: DocumentData): Product {
   return {
     id,
+    businessId:
+      typeof data.businessId === "string" && data.businessId ? data.businessId : undefined,
     name: String(data.name ?? ""),
     description: String(data.description ?? ""),
     unitPrice: Number(data.unitPrice ?? 0),
@@ -187,6 +212,8 @@ function mapProductDoc(id: string, data: DocumentData): Product {
 function mapSaleDoc(id: string, data: DocumentData): Sale {
   return {
     id,
+    businessId:
+      typeof data.businessId === "string" && data.businessId ? data.businessId : undefined,
     clientId: String(data.clientId ?? ""),
     clientName: String(data.clientName ?? ""),
     saleDate: String(data.saleDate ?? todayIsoDate()),
@@ -217,6 +244,8 @@ function mapSaleDoc(id: string, data: DocumentData): Sale {
 function mapDebtDoc(id: string, data: DocumentData): Debt {
   return {
     id,
+    businessId:
+      typeof data.businessId === "string" && data.businessId ? data.businessId : undefined,
     saleId: String(data.saleId ?? ""),
     clientId: String(data.clientId ?? ""),
     clientName: String(data.clientName ?? ""),
@@ -233,6 +262,8 @@ function mapDebtDoc(id: string, data: DocumentData): Debt {
 function mapPaymentDoc(id: string, data: DocumentData): Payment {
   return {
     id,
+    businessId:
+      typeof data.businessId === "string" && data.businessId ? data.businessId : undefined,
     debtId: String(data.debtId ?? ""),
     clientId: String(data.clientId ?? ""),
     clientName: String(data.clientName ?? ""),
@@ -279,16 +310,94 @@ function mapUserDoc(id: string, data: DocumentData): User {
     id,
     fullName: String(data.fullName ?? ""),
     email: String(data.email ?? ""),
-    role:
-      data.role === "admin" ||
-      data.role === "gestionnaire" ||
-      data.role === "vendeur" ||
-      data.role === "client"
-        ? data.role
-        : "vendeur",
+    role: normalizeRole(data.role),
+    businessId:
+      typeof data.businessId === "string" && data.businessId ? data.businessId : undefined,
+    status: typeof data.status === "string" && data.status ? data.status : undefined,
     clientId: typeof data.clientId === "string" && data.clientId ? data.clientId : undefined,
     isActive: data.isActive !== false,
     authProvider: data.authProvider === "google" ? "google" : "password",
+    createdAt: asIsoString(data.createdAt),
+  }
+}
+
+function mapBusinessDoc(id: string, data: DocumentData): Business {
+  return {
+    id,
+    name: String(data.name ?? ""),
+    ownerUid: String(data.ownerUid ?? ""),
+    plan:
+      data.plan === "starter" ||
+      data.plan === "pro" ||
+      data.plan === "enterprise"
+        ? data.plan
+        : "free",
+    status:
+      data.status === "suspended" ||
+      data.status === "trialing" ||
+      data.status === "archived"
+        ? data.status
+        : "active",
+    createdAt: asIsoString(data.createdAt),
+  }
+}
+
+function mapPlanDoc(id: string, data: DocumentData): Plan {
+  return {
+    id:
+      id === "starter" || id === "pro" || id === "enterprise"
+        ? id
+        : "free",
+    name: String(data.name ?? ""),
+    monthlyPrice: Number(data.monthlyPrice ?? 0),
+    currency: String(data.currency ?? "USD"),
+    features: Array.isArray(data.features)
+      ? data.features.map((entry) => String(entry))
+      : [],
+    active: data.active !== false,
+    createdAt: asIsoString(data.createdAt),
+  }
+}
+
+function mapSubscriptionDoc(id: string, data: DocumentData): Subscription {
+  return {
+    id,
+    businessId: String(data.businessId ?? ""),
+    planId:
+      data.planId === "starter" || data.planId === "pro" || data.planId === "enterprise"
+        ? data.planId
+        : "free",
+    status:
+      data.status === "trialing" ||
+      data.status === "past_due" ||
+      data.status === "expired" ||
+      data.status === "suspended" ||
+      data.status === "cancelled"
+        ? data.status
+        : "active",
+    startedAt: asIsoString(data.startedAt ?? data.createdAt),
+    expiresAt: typeof data.expiresAt === "string" ? data.expiresAt : undefined,
+    renewedAt: typeof data.renewedAt === "string" ? data.renewedAt : undefined,
+    suspendedAt: typeof data.suspendedAt === "string" ? data.suspendedAt : undefined,
+    createdAt: asIsoString(data.createdAt),
+  }
+}
+
+function mapSubscriptionPaymentDoc(id: string, data: DocumentData): SubscriptionPayment {
+  return {
+    id,
+    businessId: String(data.businessId ?? ""),
+    subscriptionId: String(data.subscriptionId ?? ""),
+    amount: Number(data.amount ?? 0),
+    currency: String(data.currency ?? "USD"),
+    provider: String(data.provider ?? ""),
+    providerReference: String(data.providerReference ?? ""),
+    status:
+      data.status === "pending" ||
+      data.status === "failed" ||
+      data.status === "cancelled"
+        ? data.status
+        : "confirmed",
     createdAt: asIsoString(data.createdAt),
   }
 }
@@ -327,7 +436,7 @@ function formatUsersCollectionIssue(currentUser: User | null, error: unknown) {
       return "Lecture de users refusee: aucune session utilisateur n'est active."
     }
 
-    if (currentUser.role !== "admin" && currentUser.role !== "gestionnaire") {
+    if (!canReadUsersCollection(currentUser.role)) {
       return `Permission denied sur users: le role ${currentUser.role} ne peut pas lire toute la collection users.`
     }
 
@@ -345,7 +454,8 @@ function buildUserProfile(
   firebaseUser: FirebaseUser,
   role: UserRole,
   fallbackFullName?: string,
-  clientId?: string
+  clientId?: string,
+  businessId?: string
 ): User {
   return {
     id: firebaseUser.uid,
@@ -356,12 +466,36 @@ function buildUserProfile(
       "Utilisateur",
     email: firebaseUser.email ?? "",
     role,
+    businessId,
     clientId,
+    status: "active",
     isActive: true,
     authProvider:
       firebaseUser.providerData[0]?.providerId === "google.com" ? "google" : "password",
     createdAt: new Date().toISOString(),
   }
+}
+
+function belongsToBusiness(
+  data: { businessId?: string },
+  businessId: string | null
+) {
+  if (!businessId) {
+    return true
+  }
+
+  return !data.businessId || data.businessId === businessId
+}
+
+function belongsToBusinessStrict(
+  data: { businessId?: string },
+  businessId: string | null
+) {
+  if (!businessId) {
+    return true
+  }
+
+  return data.businessId === businessId
 }
 
 async function persistUserProfile(profile: User) {
@@ -371,6 +505,8 @@ async function persistUserProfile(profile: User) {
       email: profile.email,
       fullName: profile.fullName,
       role: profile.role,
+      businessId: profile.businessId ?? null,
+      status: profile.status ?? "active",
       clientId: profile.clientId ?? null,
       isActive: profile.isActive,
       authProvider: profile.authProvider ?? "password",
@@ -388,7 +524,8 @@ async function syncUserProfile(firebaseUser: FirebaseUser): Promise<User> {
     firebaseUser,
     fallbackRole,
     fallbackUser?.fullName,
-    fallbackUser?.clientId
+    fallbackUser?.clientId,
+    fallbackUser?.businessId
   )
 
   async function resolveClientProfile() {
@@ -410,7 +547,12 @@ async function syncUserProfile(firebaseUser: FirebaseUser): Promise<User> {
       return null
     }
 
-    return buildUserProfile(firebaseUser, "client", clientDoc.data().fullName, clientDoc.id)
+    return buildUserProfile(
+      firebaseUser,
+      "client",
+      clientDoc.data().fullName,
+      clientDoc.id
+    )
   }
 
   try {
@@ -442,17 +584,19 @@ async function syncUserProfile(firebaseUser: FirebaseUser): Promise<User> {
         typeof data.email === "string" && data.email
           ? data.email
           : fallbackProfile.email,
-      role:
-        data.role === "admin" ||
-        data.role === "gestionnaire" ||
-        data.role === "vendeur" ||
-        data.role === "client"
-          ? data.role
-          : resolvedClientProfile?.role ?? fallbackRole,
+      role: normalizeRole(data.role ?? resolvedClientProfile?.role ?? fallbackRole),
+      businessId:
+        typeof data.businessId === "string" && data.businessId
+          ? data.businessId
+          : fallbackProfile.businessId,
       clientId:
         typeof data.clientId === "string" && data.clientId
           ? data.clientId
           : resolvedClientProfile?.clientId ?? fallbackProfile.clientId,
+      status:
+        typeof data.status === "string" && data.status
+          ? data.status
+          : fallbackProfile.status,
       isActive: data.isActive !== false,
       authProvider: data.authProvider === "google" ? "google" : "password",
       createdAt:
@@ -478,6 +622,29 @@ export function useCommercialApp() {
   const [authReady, setAuthReady] = useState(!useFirebaseAuth)
   const [manageableUsers, setManageableUsers] = useState<User[]>([])
   const [usersCollectionIssue, setUsersCollectionIssue] = useState<string | null>(null)
+
+  function getCurrentBusinessId() {
+    const directBusinessId = resolveUserBusinessId(currentUser)
+    if (directBusinessId) {
+      return directBusinessId
+    }
+
+    if (currentUser) {
+      const loadedUserBusinessId = resolveUserBusinessId(
+        data.users.find((entry) => entry.id === currentUser.id)
+      )
+      if (loadedUserBusinessId) {
+        return loadedUserBusinessId
+      }
+
+      const ownedBusiness = data.businesses.find((entry) => entry.ownerUid === currentUser.id)
+      if (ownedBusiness?.id) {
+        return ownedBusiness.id
+      }
+    }
+
+    return null
+  }
 
   useEffect(() => {
     if (useFirebaseAuth) {
@@ -528,7 +695,18 @@ export function useCommercialApp() {
 
     const unsubscribers: Array<() => void> = []
 
-    if (currentUser.role === "client") {
+    if (isClientRole(currentUser.role)) {
+      unsubscribers.push(
+        onSnapshot(collection(db, firestoreCollections.businesses), (snapshot) => {
+          setData((current) => ({
+            ...current,
+            businesses: snapshot.docs
+              .map((entry) => mapBusinessDoc(entry.id, entry.data()))
+              .sort((left, right) => left.name.localeCompare(right.name)),
+          }))
+        })
+      )
+
       if (currentUser.clientId) {
         unsubscribers.push(
           onSnapshot(doc(db, firestoreCollections.clients, currentUser.clientId), (snapshot) => {
@@ -596,27 +774,66 @@ export function useCommercialApp() {
         })
       )
     } else {
+      const businessId = getCurrentBusinessId()
+      const canAccessBusinessData = currentUser.role === "super_admin" || !!businessId
+
+      if (!canAccessBusinessData) {
+        unsubscribers.push(
+          onSnapshot(doc(db, firestoreCollections.users, currentUser.id), (snapshot) => {
+            setUsersCollectionIssue(null)
+            setData((current) => ({
+              ...current,
+              users: snapshot.exists() ? [mapUserDoc(snapshot.id, snapshot.data())] : [],
+              clients: [],
+              products: [],
+              sales: [],
+              debts: [],
+              payments: [],
+              stockMovements: [],
+              auditLogs: [],
+              businesses: [],
+              plans: [],
+              subscriptions: [],
+              subscriptionPayments: [],
+            }))
+          })
+        )
+
+        return () => {
+          unsubscribers.forEach((unsubscribe) => unsubscribe())
+        }
+      }
+
       unsubscribers.push(
         onSnapshot(collection(db, firestoreCollections.clients), (snapshot) => {
+          const businessId = getCurrentBusinessId()
           setData((current) => ({
             ...current,
-            clients: snapshot.docs.map((entry) => mapClientDoc(entry.id, entry.data())),
+            clients: snapshot.docs
+              .map((entry) => mapClientDoc(entry.id, entry.data()))
+              .filter((entry) =>
+                currentUser.role === "super_admin"
+                  ? true
+                  : belongsToBusinessStrict(entry, businessId)
+              ),
           }))
         })
       )
 
-      if (
-        currentUser.role === "admin" ||
-        currentUser.role === "gestionnaire" ||
-        currentUser.role === "vendeur"
-      ) {
+      if (canReadUsersCollection(currentUser.role) || currentUser.role === "seller" || currentUser.role === "vendeur") {
         unsubscribers.push(
           onSnapshot(collection(db, firestoreCollections.users), (snapshot) => {
+            const businessId = getCurrentBusinessId()
             setUsersCollectionIssue(null)
             setData((current) => ({
               ...current,
               users: snapshot.docs
                 .map((entry) => mapUserDoc(entry.id, entry.data()))
+                .filter((entry) =>
+                  currentUser.role === "super_admin"
+                    ? true
+                    : entry.role !== "super_admin" && belongsToBusiness(entry, businessId)
+                )
                 .sort((left, right) => left.fullName.localeCompare(right.fullName)),
             }))
           }, (error) => {
@@ -641,38 +858,63 @@ export function useCommercialApp() {
 
       unsubscribers.push(
         onSnapshot(collection(db, firestoreCollections.products), (snapshot) => {
+          const businessId = getCurrentBusinessId()
           setData((current) => ({
             ...current,
-            products: snapshot.docs.map((entry) => mapProductDoc(entry.id, entry.data())),
+            products: snapshot.docs
+              .map((entry) => mapProductDoc(entry.id, entry.data()))
+              .filter((entry) =>
+                currentUser.role === "super_admin"
+                  ? true
+                  : belongsToBusinessStrict(entry, businessId)
+              ),
           }))
         })
       )
       unsubscribers.push(
         onSnapshot(collection(db, firestoreCollections.sales), (snapshot) => {
+          const businessId = getCurrentBusinessId()
           setData((current) => ({
             ...current,
             sales: snapshot.docs
               .map((entry) => mapSaleDoc(entry.id, entry.data()))
+              .filter((entry) =>
+                currentUser.role === "super_admin"
+                  ? true
+                  : belongsToBusinessStrict(entry, businessId)
+              )
               .sort((left, right) => right.saleDate.localeCompare(left.saleDate)),
           }))
         })
       )
       unsubscribers.push(
         onSnapshot(collection(db, firestoreCollections.debts), (snapshot) => {
+          const businessId = getCurrentBusinessId()
           setData((current) => ({
             ...current,
             debts: snapshot.docs
               .map((entry) => mapDebtDoc(entry.id, entry.data()))
+              .filter((entry) =>
+                currentUser.role === "super_admin"
+                  ? true
+                  : belongsToBusinessStrict(entry, businessId)
+              )
               .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
           }))
         })
       )
       unsubscribers.push(
         onSnapshot(collection(db, firestoreCollections.payments), (snapshot) => {
+          const businessId = getCurrentBusinessId()
           setData((current) => ({
             ...current,
             payments: snapshot.docs
               .map((entry) => mapPaymentDoc(entry.id, entry.data()))
+              .filter((entry) =>
+                currentUser.role === "super_admin"
+                  ? true
+                  : belongsToBusinessStrict(entry, businessId)
+              )
               .sort((left, right) => right.paymentDate.localeCompare(left.paymentDate)),
           }))
         })
@@ -709,6 +951,55 @@ export function useCommercialApp() {
           }
         )
       )
+
+      if (currentUser.role === "super_admin") {
+        unsubscribers.push(
+          onSnapshot(collection(db, firestoreCollections.businesses), (snapshot) => {
+            setData((current) => ({
+              ...current,
+              businesses: snapshot.docs
+                .map((entry) => mapBusinessDoc(entry.id, entry.data()))
+                .sort((left, right) => left.name.localeCompare(right.name)),
+            }))
+          })
+        )
+        unsubscribers.push(
+          onSnapshot(collection(db, firestoreCollections.plans), (snapshot) => {
+            setData((current) => ({
+              ...current,
+              plans: snapshot.docs.map((entry) => mapPlanDoc(entry.id, entry.data())),
+            }))
+          })
+        )
+        unsubscribers.push(
+          onSnapshot(collection(db, firestoreCollections.subscriptions), (snapshot) => {
+            setData((current) => ({
+              ...current,
+              subscriptions: snapshot.docs
+                .map((entry) => mapSubscriptionDoc(entry.id, entry.data()))
+                .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
+            }))
+          })
+        )
+        unsubscribers.push(
+          onSnapshot(collection(db, firestoreCollections.subscriptionPayments), (snapshot) => {
+            setData((current) => ({
+              ...current,
+              subscriptionPayments: snapshot.docs
+                .map((entry) => mapSubscriptionPaymentDoc(entry.id, entry.data()))
+                .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
+            }))
+          })
+        )
+      } else {
+        setData((current) => ({
+          ...current,
+          businesses: [],
+          plans: [],
+          subscriptions: [],
+          subscriptionPayments: [],
+        }))
+      }
     }
 
     return () => {
@@ -731,7 +1022,7 @@ export function useCommercialApp() {
       return
     }
 
-    if ((currentUser.role === "admin" || currentUser.role === "gestionnaire") && data.users.length === 0) {
+    if (canReadUsersCollection(currentUser.role) && data.users.length === 0) {
       setUsersCollectionIssue(
         "Aucun document utilisateur trouve dans Firestore. Cause probable: documents manquants dans la collection users."
       )
@@ -800,9 +1091,19 @@ export function useCommercialApp() {
     }
   }
 
-  async function register(fullName: string, email: string, password: string) {
+  async function register(
+    fullName: string,
+    email: string,
+    password: string,
+    accountType: "client" | "owner" = "client",
+    businessName = ""
+  ) {
     if (!fullName.trim()) {
       throw new Error("Le nom complet est obligatoire.")
+    }
+
+    if (accountType === "owner" && !businessName.trim()) {
+      throw new Error("Le nom du business est obligatoire pour un compte commerce.")
     }
 
     const registerLocally = () => {
@@ -814,12 +1115,15 @@ export function useCommercialApp() {
         throw new Error("Cette adresse email est deja utilisee.")
       }
 
+      const businessId = accountType === "owner" ? uuid("biz") : undefined
       const profile: User = {
         id: uuid("usr"),
         fullName: fullName.trim(),
         email,
         password,
-        role: "client",
+        role: accountType === "owner" ? "owner" : "client",
+        businessId,
+        status: "active",
         clientId: undefined,
         isActive: true,
         authProvider: "password",
@@ -828,6 +1132,20 @@ export function useCommercialApp() {
 
       setData((current) => ({
         ...current,
+        businesses:
+          accountType === "owner"
+            ? [
+                {
+                  id: businessId!,
+                  name: businessName.trim(),
+                  ownerUid: profile.id,
+                  plan: "free",
+                  status: "active",
+                  createdAt: new Date().toISOString(),
+                },
+                ...current.businesses,
+              ]
+            : current.businesses,
         users: [profile, ...current.users],
       }))
       setCurrentUser(profile)
@@ -842,7 +1160,24 @@ export function useCommercialApp() {
       const credential = await createUserWithEmailAndPassword(auth, email, password)
       await updateProfile(credential.user, { displayName: fullName })
 
-      const profile = buildUserProfile(credential.user, "client", fullName)
+      const profile = buildUserProfile(
+        credential.user,
+        accountType === "owner" ? "owner" : "client",
+        fullName
+      )
+      profile.status = "active"
+
+      if (accountType === "owner") {
+        const businessRef = doc(collection(db, firestoreCollections.businesses))
+        profile.businessId = businessRef.id
+        await setDoc(businessRef, {
+          name: businessName.trim(),
+          ownerUid: credential.user.uid,
+          plan: "free",
+          status: "active",
+          createdAt: new Date().toISOString(),
+        })
+      }
 
       try {
         await persistUserProfile(profile)
@@ -892,13 +1227,13 @@ export function useCommercialApp() {
       throw new Error("Utilisateur non connecte.")
     }
 
-    if (currentUser.role !== "admin") {
-      throw new Error("Seul un administrateur peut gerer les roles.")
+    if (!canManageUsers(currentUser.role)) {
+      throw new Error("Seul un compte administrateur peut gerer les roles.")
     }
   }
 
   function countActiveAdmins(users: User[]) {
-    return users.filter((user) => user.role === "admin" && user.isActive).length
+    return users.filter((user) => isProtectedAdminRole(user.role) && user.isActive).length
   }
 
   function getManageableUsersSource() {
@@ -918,14 +1253,18 @@ export function useCommercialApp() {
       throw new Error("Utilisateur introuvable.")
     }
 
+    if (!getAssignableRolesForActor(adminUser.role).includes(role)) {
+      throw new Error("Ce role ne peut pas etre attribue par votre compte.")
+    }
+
     const activeAdmins = countActiveAdmins(usersSource)
     if (
       targetUser.id === currentUser?.id &&
-      targetUser.role === "admin" &&
-      role !== "admin" &&
+      isProtectedAdminRole(targetUser.role) &&
+      !isProtectedAdminRole(role) &&
       activeAdmins <= 1
     ) {
-      throw new Error("Un seul admin actif ne peut pas perdre son role admin.")
+      throw new Error("Le dernier compte administrateur actif ne peut pas perdre ses privileges.")
     }
 
     if (useFirebaseAuth) {
@@ -974,12 +1313,12 @@ export function useCommercialApp() {
 
     const activeAdmins = countActiveAdmins(usersSource)
     if (
-      targetUser.role === "admin" &&
+      isProtectedAdminRole(targetUser.role) &&
       targetUser.isActive &&
       !isActive &&
       activeAdmins <= 1
     ) {
-      throw new Error("Le dernier administrateur actif ne peut pas etre desactive.")
+      throw new Error("Le dernier compte administrateur actif ne peut pas etre desactive.")
     }
 
     if (useFirebaseAuth) {
@@ -1035,6 +1374,7 @@ export function useCommercialApp() {
 
   async function syncClientUserLink(clientId: string, email?: string) {
     const normalizedEmail = email?.trim().toLowerCase() ?? ""
+    const businessId = getCurrentBusinessId()
 
     if (useFirebaseAuth) {
       const linkedUsersSnapshot = await getDocs(
@@ -1070,6 +1410,7 @@ export function useCommercialApp() {
         targetUsersSnapshot.docs.map((entry) =>
           updateDoc(doc(db, firestoreCollections.users, entry.id), {
             role: "client",
+            businessId: businessId ?? null,
             clientId,
             updatedAt: serverTimestamp(),
           })
@@ -1096,6 +1437,8 @@ export function useCommercialApp() {
   }
 
   function addClient(payload: Omit<Client, "id" | "createdAt">) {
+    const businessId = getCurrentBusinessId()
+
     if (useFirebaseAuth) {
       const normalizedPayload = {
         ...payload,
@@ -1104,6 +1447,7 @@ export function useCommercialApp() {
 
       return addDoc(collection(db, firestoreCollections.clients), {
         ...normalizedPayload,
+        businessId,
         createdAt: new Date().toISOString(),
       }).then(async (clientRef) => {
         await syncClientUserLink(clientRef.id, normalizedPayload.email)
@@ -1113,6 +1457,7 @@ export function useCommercialApp() {
     const client: Client = {
       id: uuid("cl"),
       createdAt: new Date().toISOString(),
+      businessId: businessId ?? undefined,
       ...payload,
       email: payload.email?.trim().toLowerCase() || undefined,
     }
@@ -1136,10 +1481,13 @@ export function useCommercialApp() {
   }
 
   function updateClient(id: string, payload: Omit<Client, "id" | "createdAt">) {
+    const businessId = getCurrentBusinessId()
+
     if (useFirebaseAuth) {
       const normalizedPayload = {
         ...payload,
         email: payload.email?.trim().toLowerCase() || undefined,
+        businessId: businessId ?? null,
       }
 
       return updateDoc(doc(db, firestoreCollections.clients, id), normalizedPayload).then(
@@ -1156,6 +1504,7 @@ export function useCommercialApp() {
           ? {
               ...client,
               ...payload,
+              businessId: businessId ?? client.businessId,
               email: payload.email?.trim().toLowerCase() || undefined,
             }
           : client
@@ -1204,9 +1553,12 @@ export function useCommercialApp() {
   }
 
   function addProduct(payload: Omit<Product, "id" | "createdAt">) {
+    const businessId = getCurrentBusinessId()
+
     if (useFirebaseAuth) {
       return addDoc(collection(db, firestoreCollections.products), {
         ...payload,
+        businessId,
         createdAt: new Date().toISOString(),
       })
     }
@@ -1214,6 +1566,7 @@ export function useCommercialApp() {
     const product: Product = {
       id: uuid("pr"),
       createdAt: new Date().toISOString(),
+      businessId: businessId ?? undefined,
       ...payload,
     }
 
@@ -1234,14 +1587,21 @@ export function useCommercialApp() {
   }
 
   function updateProduct(id: string, payload: Omit<Product, "id" | "createdAt">) {
+    const businessId = getCurrentBusinessId()
+
     if (useFirebaseAuth) {
-      return updateDoc(doc(db, firestoreCollections.products, id), payload)
+      return updateDoc(doc(db, firestoreCollections.products, id), {
+        ...payload,
+        businessId: businessId ?? null,
+      })
     }
 
     setData((current) => ({
       ...current,
       products: current.products.map((product) =>
-        product.id === id ? { ...product, ...payload } : product
+        product.id === id
+          ? { ...product, ...payload, businessId: businessId ?? product.businessId }
+          : product
       ),
       auditLogs: [
         appendAudit(
@@ -1281,6 +1641,216 @@ export function useCommercialApp() {
           currentUser?.fullName ?? "System"
         ),
         ...current.auditLogs,
+      ],
+    }))
+  }
+
+  function ensureSuperAdmin() {
+    if (!currentUser || currentUser.role !== "super_admin") {
+      throw new Error("Seul le super admin peut administrer la plateforme SaaS.")
+    }
+  }
+
+  function updateBusinessSettings(
+    businessId: string,
+    payload: { plan: Business["plan"]; status: Business["status"] }
+  ) {
+    ensureSuperAdmin()
+
+    if (useFirebaseAuth) {
+      return updateDoc(doc(db, firestoreCollections.businesses, businessId), {
+        ...payload,
+        updatedAt: serverTimestamp(),
+      })
+    }
+
+    setData((current) => ({
+      ...current,
+      businesses: current.businesses.map((business) =>
+        business.id === businessId ? { ...business, ...payload } : business
+      ),
+    }))
+  }
+
+  async function createBusiness(payload: {
+    name: string
+    ownerUid: string
+    plan: Business["plan"]
+    status: Business["status"]
+  }) {
+    ensureSuperAdmin()
+
+    const name = payload.name.trim()
+    if (!name) {
+      throw new Error("Le nom du business est requis.")
+    }
+
+    const owner = data.users.find((entry) => entry.id === payload.ownerUid)
+    if (!owner) {
+      throw new Error("Utilisateur proprietaire introuvable.")
+    }
+
+    if (owner.role === "client" || owner.role === "super_admin") {
+      throw new Error("Ce compte ne peut pas devenir proprietaire de business.")
+    }
+
+    const now = new Date().toISOString()
+
+    if (useFirebaseAuth) {
+      const businessRef = doc(collection(db, firestoreCollections.businesses))
+
+      await setDoc(businessRef, {
+        name,
+        ownerUid: payload.ownerUid,
+        plan: payload.plan,
+        status: payload.status,
+        createdAt: now,
+        updatedAt: serverTimestamp(),
+      })
+
+      await updateDoc(doc(db, firestoreCollections.users, payload.ownerUid), {
+        businessId: businessRef.id,
+        role: "owner",
+        updatedAt: serverTimestamp(),
+      })
+
+      return businessRef.id
+    }
+
+    const businessId = uuid("biz")
+
+    setData((current) => ({
+      ...current,
+      businesses: [
+        {
+          id: businessId,
+          name,
+          ownerUid: payload.ownerUid,
+          plan: payload.plan,
+          status: payload.status,
+          createdAt: now,
+        },
+        ...current.businesses,
+      ],
+      users: current.users.map((user) =>
+        user.id === payload.ownerUid ? { ...user, businessId, role: "owner" } : user
+      ),
+    }))
+
+    return businessId
+  }
+
+  async function assignUserToBusiness(userId: string, businessId: string) {
+    ensureSuperAdmin()
+
+    const user = data.users.find((entry) => entry.id === userId)
+    if (!user) {
+      throw new Error("Utilisateur introuvable.")
+    }
+
+    if (user.role === "client" || user.role === "super_admin") {
+      throw new Error("Ce compte ne peut pas etre rattache a un business depuis cet ecran.")
+    }
+
+    const business = data.businesses.find((entry) => entry.id === businessId)
+    if (!business) {
+      throw new Error("Business introuvable.")
+    }
+
+    if (useFirebaseAuth) {
+      await updateDoc(doc(db, firestoreCollections.users, userId), {
+        businessId,
+        updatedAt: serverTimestamp(),
+      })
+
+      if (user.role === "owner") {
+        await updateDoc(doc(db, firestoreCollections.businesses, businessId), {
+          ownerUid: userId,
+          updatedAt: serverTimestamp(),
+        })
+      }
+
+      return
+    }
+
+    setData((current) => ({
+      ...current,
+      users: current.users.map((entry) =>
+        entry.id === userId ? { ...entry, businessId } : entry
+      ),
+      businesses: current.businesses.map((entry) =>
+        entry.id === businessId && user.role === "owner"
+          ? { ...entry, ownerUid: userId }
+          : entry
+      ),
+    }))
+  }
+
+  function updateSubscriptionStatus(
+    subscriptionId: string,
+    status: Subscription["status"]
+  ) {
+    ensureSuperAdmin()
+
+    if (useFirebaseAuth) {
+      return updateDoc(doc(db, firestoreCollections.subscriptions, subscriptionId), {
+        status,
+        updatedAt: serverTimestamp(),
+      })
+    }
+
+    setData((current) => ({
+      ...current,
+      subscriptions: current.subscriptions.map((subscription) =>
+        subscription.id === subscriptionId ? { ...subscription, status } : subscription
+      ),
+    }))
+  }
+
+  function createSubscription(payload: {
+    businessId: string
+    planId: Subscription["planId"]
+    status: Subscription["status"]
+  }) {
+    ensureSuperAdmin()
+
+    const business = data.businesses.find((entry) => entry.id === payload.businessId)
+    if (!business) {
+      throw new Error("Business introuvable.")
+    }
+
+    if (data.subscriptions.some((entry) => entry.businessId === payload.businessId)) {
+      throw new Error("Ce business possede deja un abonnement.")
+    }
+
+    const now = new Date().toISOString()
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+
+    if (useFirebaseAuth) {
+      return addDoc(collection(db, firestoreCollections.subscriptions), {
+        businessId: payload.businessId,
+        planId: payload.planId,
+        status: payload.status,
+        startedAt: now,
+        expiresAt,
+        createdAt: now,
+        updatedAt: serverTimestamp(),
+      })
+    }
+
+    setData((current) => ({
+      ...current,
+      subscriptions: [
+        {
+          id: uuid("sub"),
+          businessId: payload.businessId,
+          planId: payload.planId,
+          status: payload.status,
+          startedAt: now,
+          expiresAt,
+          createdAt: now,
+        },
+        ...current.subscriptions,
       ],
     }))
   }
@@ -1371,6 +1941,7 @@ export function useCommercialApp() {
           remainingAmount > 0 ? doc(collection(db, firestoreCollections.debts)) : null
 
         transaction.set(saleRef, {
+          businessId: clientData.businessId ?? getCurrentBusinessId() ?? null,
           clientId: input.clientId,
           clientName: String(clientData.fullName ?? ""),
           saleDate: input.saleDate || todayIsoDate(),
@@ -1396,6 +1967,7 @@ export function useCommercialApp() {
 
         if (debtRef) {
           transaction.set(debtRef, {
+            businessId: clientData.businessId ?? getCurrentBusinessId() ?? null,
             saleId: saleRef.id,
             clientId: input.clientId,
             clientName: String(clientData.fullName ?? ""),
@@ -1459,6 +2031,7 @@ export function useCommercialApp() {
 
     const sale: Sale = {
       id: saleId,
+      businessId: client.businessId ?? getCurrentBusinessId() ?? undefined,
       clientId: client.id,
       clientName: client.fullName,
       saleDate: input.saleDate || todayIsoDate(),
@@ -1477,6 +2050,7 @@ export function useCommercialApp() {
       remainingAmount > 0
         ? {
             id: debtId!,
+            businessId: client.businessId ?? getCurrentBusinessId() ?? undefined,
             saleId,
             clientId: client.id,
             clientName: client.fullName,
@@ -1531,7 +2105,7 @@ export function useCommercialApp() {
       throw new Error("Utilisateur non connecte.")
     }
 
-    if (currentUser.role === "client") {
+    if (isClientRole(currentUser.role)) {
       throw new Error(
         "Les paiements clients doivent etre confirmes par le backend et son webhook fournisseur."
       )
@@ -1563,6 +2137,7 @@ export function useCommercialApp() {
 
         const paymentRef = doc(collection(db, firestoreCollections.payments))
         transaction.set(paymentRef, {
+          businessId: String(debtData.businessId ?? ""),
           debtId: input.debtId,
           clientId: String(debtData.clientId ?? ""),
           clientName: String(debtData.clientName ?? ""),
@@ -1602,6 +2177,7 @@ export function useCommercialApp() {
 
     const payment: Payment = {
       id: uuid("pay"),
+      businessId: debt.businessId,
       debtId: debt.id,
       clientId: debt.clientId,
       clientName: debt.clientName,
@@ -1662,7 +2238,7 @@ export function useCommercialApp() {
 
   return {
     ...data,
-    manageableUsers: currentUser?.role === "admin" ? manageableUsers : data.users,
+    manageableUsers: currentUser && canManageUsers(currentUser.role) ? manageableUsers : data.users,
     currentUser,
     authReady,
     useFirebaseAuth,
@@ -1679,6 +2255,11 @@ export function useCommercialApp() {
     addProduct,
     updateProduct,
     deleteProduct,
+    updateBusinessSettings,
+    createBusiness,
+    assignUserToBusiness,
+    createSubscription,
+    updateSubscriptionStatus,
     createSale,
     addPayment,
   }

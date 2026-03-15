@@ -17,6 +17,8 @@ import { DemoAccount, FeatureCard, Field } from "@/components/app/shared"
 export function AuthScreen({
   authMode,
   registerName,
+  registerAccountType,
+  registerBusinessName,
   loginEmail,
   loginPassword,
   loginError,
@@ -24,6 +26,8 @@ export function AuthScreen({
   useFirebaseAuth,
   onSwitchMode,
   onRegisterNameChange,
+  onRegisterAccountTypeChange,
+  onRegisterBusinessNameChange,
   onEmailChange,
   onPasswordChange,
   onSubmit,
@@ -32,6 +36,8 @@ export function AuthScreen({
 }: {
   authMode: "login" | "register"
   registerName: string
+  registerAccountType: "client" | "owner"
+  registerBusinessName: string
   loginEmail: string
   loginPassword: string
   loginError: string
@@ -39,6 +45,8 @@ export function AuthScreen({
   useFirebaseAuth: boolean
   onSwitchMode: (mode: "login" | "register") => void
   onRegisterNameChange: (value: string) => void
+  onRegisterAccountTypeChange: (value: "client" | "owner") => void
+  onRegisterBusinessNameChange: (value: string) => void
   onEmailChange: (value: string) => void
   onPasswordChange: (value: string) => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
@@ -132,14 +140,58 @@ export function AuthScreen({
 
           <form className="mt-8 space-y-5" onSubmit={onSubmit}>
             {authMode === "register" ? (
-              <Field label="Nom complet">
-                <input
-                  className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 outline-none transition focus:border-cyan-500"
-                  value={registerName}
-                  onChange={(event) => onRegisterNameChange(event.target.value)}
-                  required
-                />
-              </Field>
+              <>
+                <Field label="Nom complet">
+                  <input
+                    className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 outline-none transition focus:border-cyan-500"
+                    value={registerName}
+                    onChange={(event) => onRegisterNameChange(event.target.value)}
+                    required
+                  />
+                </Field>
+
+                <Field label="Type de compte">
+                  <div className="grid grid-cols-2 gap-3 rounded-[1.25rem] bg-slate-100 p-1">
+                    <button
+                      type="button"
+                      className={`rounded-[1rem] px-4 py-3 text-sm font-semibold transition ${
+                        registerAccountType === "owner"
+                          ? "bg-white text-slate-950 shadow-sm"
+                          : "text-slate-500"
+                      }`}
+                      onClick={() => onRegisterAccountTypeChange("owner")}
+                    >
+                      Commerce
+                    </button>
+                    <button
+                      type="button"
+                      className={`rounded-[1rem] px-4 py-3 text-sm font-semibold transition ${
+                        registerAccountType === "client"
+                          ? "bg-white text-slate-950 shadow-sm"
+                          : "text-slate-500"
+                      }`}
+                      onClick={() => onRegisterAccountTypeChange("client")}
+                    >
+                      Client
+                    </button>
+                  </div>
+                  <p className="text-sm leading-6 text-slate-500">
+                    Si le compte est un commerce, le business doit etre cree maintenant.
+                  </p>
+                </Field>
+
+                {registerAccountType === "owner" ? (
+                  <Field label="Nom du business">
+                    <input
+                      className="h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 outline-none transition focus:border-cyan-500"
+                      value={registerBusinessName}
+                      onChange={(event) => onRegisterBusinessNameChange(event.target.value)}
+                      placeholder="Boutique Nzambe"
+                      required
+                    />
+                  </Field>
+                ) : null}
+              </>
             ) : null}
 
             <Field label="Email">

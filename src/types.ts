@@ -1,9 +1,26 @@
-export type UserRole = "admin" | "vendeur" | "gestionnaire" | "client"
+export type UserRole =
+  | "super_admin"
+  | "owner"
+  | "manager"
+  | "seller"
+  | "admin"
+  | "vendeur"
+  | "gestionnaire"
+  | "client"
 
 export type PaymentType = "cash" | "credit" | "deposit"
 export type DebtStatus = "unpaid" | "partial" | "paid"
 export type ProductStatus = "active" | "inactive"
 export type PaymentMethod = "cash" | "mobile_money" | "bank" | "card"
+export type BusinessPlanCode = "free" | "starter" | "pro" | "enterprise"
+export type BusinessStatus = "active" | "suspended" | "trialing" | "archived"
+export type SubscriptionStatus =
+  | "trialing"
+  | "active"
+  | "past_due"
+  | "expired"
+  | "suspended"
+  | "cancelled"
 
 export interface User {
   id: string
@@ -11,6 +28,8 @@ export interface User {
   email: string
   password?: string
   role: UserRole
+  businessId?: string
+  status?: string
   clientId?: string
   isActive: boolean
   createdAt: string
@@ -19,6 +38,7 @@ export interface User {
 
 export interface Client {
   id: string
+  businessId?: string
   fullName: string
   email?: string
   phone: string
@@ -29,6 +49,7 @@ export interface Client {
 
 export interface Product {
   id: string
+  businessId?: string
   name: string
   description: string
   unitPrice: number
@@ -48,6 +69,7 @@ export interface SaleItem {
 
 export interface Sale {
   id: string
+  businessId?: string
   clientId: string
   clientName: string
   saleDate: string
@@ -64,6 +86,7 @@ export interface Sale {
 
 export interface Debt {
   id: string
+  businessId?: string
   saleId: string
   clientId: string
   clientName: string
@@ -77,6 +100,7 @@ export interface Debt {
 
 export interface Payment {
   id: string
+  businessId?: string
   debtId: string
   clientId: string
   clientName: string
@@ -107,6 +131,49 @@ export interface AuditLog {
   entityId: string
   actorName: string
   details: string
+  createdAt: string
+}
+
+export interface Business {
+  id: string
+  name: string
+  ownerUid: string
+  plan: BusinessPlanCode
+  status: BusinessStatus
+  createdAt: string
+}
+
+export interface Plan {
+  id: BusinessPlanCode
+  name: string
+  monthlyPrice: number
+  currency: string
+  features: string[]
+  active: boolean
+  createdAt: string
+}
+
+export interface Subscription {
+  id: string
+  businessId: string
+  planId: BusinessPlanCode
+  status: SubscriptionStatus
+  startedAt: string
+  expiresAt?: string
+  renewedAt?: string
+  suspendedAt?: string
+  createdAt: string
+}
+
+export interface SubscriptionPayment {
+  id: string
+  businessId: string
+  subscriptionId: string
+  amount: number
+  currency: string
+  provider: string
+  providerReference: string
+  status: "pending" | "confirmed" | "failed" | "cancelled"
   createdAt: string
 }
 
@@ -167,4 +234,8 @@ export interface AppDataSnapshot {
   payments: Payment[]
   stockMovements: StockMovement[]
   auditLogs: AuditLog[]
+  businesses: Business[]
+  plans: Plan[]
+  subscriptions: Subscription[]
+  subscriptionPayments: SubscriptionPayment[]
 }

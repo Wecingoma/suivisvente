@@ -15,12 +15,34 @@ service cloud.firestore {
         : request.auth.token.role;
     }
 
+    function currentBusinessId() {
+      return profileDoc().data != null && profileDoc().data.businessId != null
+        ? profileDoc().data.businessId
+        : request.auth.token.businessId;
+    }
+
     function hasRole(roles) {
       return isSignedIn() && currentRole() in roles;
     }
 
     function isStaff() {
-      return hasRole(['admin', 'vendeur', 'gestionnaire']);
+      return hasRole([
+        'super_admin',
+        'owner',
+        'manager',
+        'seller',
+        'admin',
+        'gestionnaire',
+        'vendeur',
+      ]);
+    }
+
+    function isPlatformAdmin() {
+      return hasRole(['super_admin']);
+    }
+
+    function isBusinessAdmin() {
+      return hasRole(['owner', 'manager', 'admin', 'gestionnaire']);
     }
 
     function currentClientId() {
@@ -33,75 +55,189 @@ service cloud.firestore {
       return request.auth.token.email != null ? request.auth.token.email : null;
     }
 
+    function businessMatches(data) {
+      return !('businessId' in data) ||
+        data.businessId == null ||
+        isPlatformAdmin() ||
+        (currentBusinessId() != null && data.businessId == currentBusinessId());
+    }
+
+    function incomingBusinessMatches() {
+      return !('businessId' in request.resource.data) ||
+        request.resource.data.businessId == null ||
+        isPlatformAdmin() ||
+        (currentBusinessId() != null && request.resource.data.businessId == currentBusinessId());
+    }
+
+    function incomingBusinessExists() {
+      return 'businessId' in request.resource.data &&
+        request.resource.data.businessId != null &&
+        exists(/databases/$(database)/documents/businesses/$(request.resource.data.businessId));
+    }
+
+    function incomingBusinessOwnedByRequester() {
+      return incomingBusinessExists() &&
+        get(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.ownerUid == request.auth.uid;
+    }
+
     function isClientLinkUpdate() {
-      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'clientId', 'updatedAt']) &&
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'clientId', 'businessId', 'status', 'updatedAt']) &&
         request.resource.data.role == 'client';
     }
 
     match /users/{userId} {
-      allow read: if hasRole(['admin', 'gestionnaire', 'vendeur']) || (isSignedIn() && request.auth.uid == userId);
-      allow create: if hasRole(['admin']) || (
+      allow read: if (
+        isStaff() &&
+        businessMatches(resource.data)
+      ) || (isSignedIn() && request.auth.uid == userId);
+      allow create: if isPlatformAdmin() || isBusinessAdmin() || (
         isSignedIn() &&
         request.auth.uid == userId &&
-        request.resource.data.role in ['vendeur', 'client']
+        (
+          (
+            request.resource.data.role in ['vendeur', 'seller', 'client'] &&
+            incomingBusinessMatches()
+          ) ||
+          (
+            request.resource.data.role == 'owner' &&
+            (
+              incomingBusinessMatches() ||
+              incomingBusinessOwnedByRequester()
+            )
+          )
+        )
       );
-      allow update: if hasRole(['admin']) ||
-        (hasRole(['vendeur', 'gestionnaire']) && isClientLinkUpdate()) || (
+      allow update: if (
+        isPlatformAdmin() ||
+        (isBusinessAdmin() && businessMatches(resource.data) && incomingBusinessMatches()) ||
+        (hasRole(['vendeur', 'seller', 'gestionnaire', 'manager']) &&
+          businessMatches(resource.data) &&
+          incomingBusinessMatches() &&
+          isClientLinkUpdate())
+      ) || (
         isSignedIn() &&
         request.auth.uid == userId &&
         request.resource.data.role == resource.data.role &&
-        request.resource.data.clientId == resource.data.clientId
+        request.resource.data.clientId == resource.data.clientId &&
+        (
+          request.resource.data.businessId == resource.data.businessId ||
+          (!('businessId' in resource.data) && !('businessId' in request.resource.data))
+        )
       );
-      allow delete: if hasRole(['admin']);
+      allow delete: if isPlatformAdmin() || (hasRole(['owner', 'admin']) && businessMatches(resource.data));
+    }
+
+    match /businesses/{businessId} {
+      allow read: if isSignedIn();
+      allow create: if isPlatformAdmin() || (
+        isSignedIn() &&
+        request.resource.data.ownerUid == request.auth.uid
+      );
+      allow update: if isPlatformAdmin() || (
+        hasRole(['owner']) &&
+        currentBusinessId() == businessId
+      );
+      allow delete: if isPlatformAdmin();
+    }
+
+    match /plans/{planId} {
+      allow read: if isSignedIn();
+      allow write: if isPlatformAdmin();
+    }
+
+    match /subscriptions/{subscriptionId} {
+      allow read: if isPlatformAdmin() || (
+        isBusinessAdmin() &&
+        businessMatches(resource.data)
+      );
+      allow write: if isPlatformAdmin();
+    }
+
+    match /subscription_payments/{paymentId} {
+      allow read: if isPlatformAdmin() || (
+        hasRole(['owner', 'manager', 'admin', 'gestionnaire']) &&
+        businessMatches(resource.data)
+      );
+      allow write: if isPlatformAdmin();
+    }
+
+    match /payment_sessions/{sessionId} {
+      allow read: if isPlatformAdmin() || (
+        isSignedIn() &&
+        businessMatches(resource.data) &&
+        (
+          isStaff() ||
+          (currentClientId() != null && resource.data.clientId == currentClientId())
+        )
+      );
+      allow create: if false;
+      allow update, delete: if isPlatformAdmin();
     }
 
     match /clients/{docId} {
-      allow read: if isStaff() || (
+      allow read: if (
+        isStaff() &&
+        businessMatches(resource.data)
+      ) || (
         isSignedIn() &&
+        businessMatches(resource.data) &&
         (
           (currentClientId() != null && docId == currentClientId()) ||
           (authEmail() != null && resource.data.email == authEmail())
         )
       );
-      allow write: if isStaff();
+      allow write: if isStaff() && incomingBusinessMatches();
     }
 
     match /products/{docId} {
-      allow read, write: if isStaff();
+      allow read: if isStaff() && businessMatches(resource.data);
+      allow write: if isStaff() && incomingBusinessMatches();
     }
 
     match /sales/{docId} {
-      allow read, write: if isStaff();
+      allow read: if isStaff() && businessMatches(resource.data);
+      allow write: if isStaff() && incomingBusinessMatches();
     }
 
     match /sale_items/{docId} {
-      allow read, write: if isStaff();
+      allow read: if isStaff() && businessMatches(resource.data);
+      allow write: if isStaff() && incomingBusinessMatches();
     }
 
     match /debts/{docId} {
-      allow read: if isStaff() || (
+      allow read: if (
+        isStaff() &&
+        businessMatches(resource.data)
+      ) || (
         isSignedIn() &&
+        businessMatches(resource.data) &&
         currentClientId() != null &&
         resource.data.clientId == currentClientId()
       );
-      allow write: if isStaff();
+      allow write: if isStaff() && incomingBusinessMatches();
     }
 
     match /payments/{docId} {
-      allow read: if isStaff() || (
+      allow read: if (
+        isStaff() &&
+        businessMatches(resource.data)
+      ) || (
         isSignedIn() &&
+        businessMatches(resource.data) &&
         currentClientId() != null &&
         resource.data.clientId == currentClientId()
       );
-      allow write: if isStaff();
+      allow write: if isStaff() && incomingBusinessMatches();
     }
 
     match /stock_movements/{docId} {
-      allow read, write: if isStaff();
+      allow read: if isStaff() && businessMatches(resource.data);
+      allow write: if isStaff() && incomingBusinessMatches();
     }
 
     match /audit_logs/{docId} {
-      allow read, write: if isStaff();
+      allow read: if isStaff() && businessMatches(resource.data);
+      allow write: if isStaff() && incomingBusinessMatches();
     }
   }
 }

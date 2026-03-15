@@ -1,6 +1,8 @@
-import { useState, type FormEvent } from "react"
+import { useEffect, useState, type FormEvent } from "react"
 import {
+  Blocks,
   BadgeDollarSign,
+  Building2,
   LayoutDashboard,
   PackageSearch,
   ReceiptText,
@@ -31,6 +33,12 @@ import {
   startOfDay,
   todayIsoDate,
 } from "@/lib/format"
+import {
+  canManageUsers,
+  getAssignableRolesForActor,
+  isProtectedAdminRole,
+  roleLabels,
+} from "@/lib/roles"
 import type {
   Client,
   Debt,
@@ -39,10 +47,14 @@ import type {
   PaymentInput,
   PaymentMethod,
   PaymentType,
+  Plan,
   Product,
   SaleInput,
+  Subscription,
+  SubscriptionPayment,
   User,
   UserRole,
+  Business,
 } from "@/types"
 
 function exportCsv(filename: string, rows: string[][]) {
@@ -183,7 +195,8 @@ export function DashboardView({
   const visibleUsers = [...users].sort((left, right) =>
     left.fullName.localeCompare(right.fullName)
   )
-  const adminUsers = visibleUsers.filter((user) => user.role === "admin" && user.isActive)
+  const adminUsers = visibleUsers.filter((user) => isProtectedAdminRole(user.role) && user.isActive)
+  const assignableRolesForActor = getAssignableRolesForActor(currentUser.role)
 
   return (
     <div className="grid gap-6">
@@ -219,7 +232,7 @@ export function DashboardView({
         <DashboardStatCard label="Total encaisse" value={formatCurrency(totalCollected)} icon={BadgeDollarSign} />
       </section>
 
-      {currentUser.role === "admin" ? (
+      {canManageUsers(currentUser.role) && currentUser.role !== "owner" ? (
         <SectionCard
           title="Utilisateurs et roles"
           subtitle="Liste complete des utilisateurs, avec leur role et leur statut d'acces au dashboard."
@@ -246,7 +259,7 @@ export function DashboardView({
             {visibleUsers.length ? (
               visibleUsers.map((user) => {
                 const isLastActiveAdmin =
-                  user.role === "admin" && user.isActive && adminUsers.length <= 1
+                  isProtectedAdminRole(user.role) && user.isActive && adminUsers.length <= 1
 
                 return (
                   <div
@@ -287,10 +300,11 @@ export function DashboardView({
                             onUpdateUserRole(user.id, event.target.value as UserRole)
                           }
                         >
-                          <option value="admin">Admin</option>
-                          <option value="gestionnaire">Gestionnaire</option>
-                          <option value="vendeur">Vendeur</option>
-                          <option value="client">Client</option>
+                          {assignableRolesForActor.map((role) => (
+                            <option key={role} value={role}>
+                              {roleLabels[role]}
+                            </option>
+                          ))}
                         </select>
                         <Button
                           type="button"
@@ -309,7 +323,7 @@ export function DashboardView({
                     {isLastActiveAdmin ? (
                       <div className="mt-3 flex items-center gap-2 text-sm text-amber-700">
                         <ShieldCheck className="h-4 w-4" />
-                        <span>Le dernier administrateur actif est protege.</span>
+                        <span>Le dernier compte administrateur actif est protege.</span>
                       </div>
                     ) : null}
                   </div>
@@ -496,11 +510,13 @@ export function ClientDashboardView({
   client,
   debts,
   payments,
+  businesses,
 }: {
   currentUser: User
   client?: Client
   debts: Debt[]
   payments: Payment[]
+  businesses: Business[]
 }) {
   const totalDebt = debts.reduce((sum, debt) => sum + debt.initialAmount, 0)
   const totalPaid = debts.reduce((sum, debt) => sum + debt.totalPaid, 0)
@@ -515,8 +531,42 @@ export function ClientDashboardView({
           : "Paiements partiels"
   const debtCount = debts.length
   const paymentCount = payments.length
-  const clientHistory = [
-    ...debts.map((debt) => ({
+  const businessSummaries = businesses
+    .map((business) => ({
+      id: business.id,
+      name: business.name,
+      debts: debts.filter((debt) => debt.businessId === business.id),
+      payments: payments.filter((payment) => payment.businessId === business.id),
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name))
+  const [selectedBusinessId, setSelectedBusinessId] = useState<string>(
+    businessSummaries[0]?.id ?? ""
+  )
+
+  useEffect(() => {
+    if (!selectedBusinessId || !businessSummaries.some((entry) => entry.id === selectedBusinessId)) {
+      setSelectedBusinessId(businessSummaries[0]?.id ?? "")
+    }
+  }, [businessSummaries, selectedBusinessId])
+
+  const selectedBusiness =
+    businessSummaries.find((entry) => entry.id === selectedBusinessId) ?? null
+  const selectedBusinessDebts = selectedBusiness?.debts ?? []
+  const selectedBusinessPayments = selectedBusiness?.payments ?? []
+  const selectedBusinessDebtTotal = selectedBusinessDebts.reduce(
+    (sum, debt) => sum + debt.initialAmount,
+    0
+  )
+  const selectedBusinessPaidTotal = selectedBusinessDebts.reduce(
+    (sum, debt) => sum + debt.totalPaid,
+    0
+  )
+  const selectedBusinessRemainingTotal = selectedBusinessDebts.reduce(
+    (sum, debt) => sum + debt.remainingAmount,
+    0
+  )
+  const selectedBusinessHistory = [
+    ...selectedBusinessDebts.map((debt) => ({
       id: `debt-${debt.id}`,
       kind: "debt" as const,
       date: debt.createdAt,
@@ -528,7 +578,7 @@ export function ClientDashboardView({
         debt.remainingAmount
       )}`,
     })),
-    ...payments.map((payment) => ({
+    ...selectedBusinessPayments.map((payment) => ({
       id: `payment-${payment.id}`,
       kind: "payment" as const,
       date: payment.createdAt || payment.paymentDate,
@@ -577,6 +627,10 @@ export function ClientDashboardView({
                   <MiniMetric label="Telephone" value={client.phone || "Non renseigne"} />
                   <MiniMetric label="Adresse" value={client.address || "Non renseignee"} />
                   <MiniMetric label="Compte relie" value={currentUser.email} />
+                  <MiniMetric
+                    label="Businesses lies"
+                    value={String(businesses.length)}
+                  />
                 </div>
                 <div className="mt-4 rounded-[1.25rem] bg-slate-100 p-4">
                   <p className="text-sm text-slate-500">Notes</p>
@@ -601,56 +655,97 @@ export function ClientDashboardView({
         </SectionCard>
 
         <SectionCard
-          title="Dettes"
-          subtitle="Etat de vos dettes liees a votre compte client."
+          title="Tous les businesses"
+          subtitle="Choisissez un business pour voir l'evolution de votre dette."
         >
           <div className="grid gap-3">
-            {debts.length ? (
-              debts.map((debt) => (
-                <div
-                  key={debt.id}
-                  className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4"
+            {businessSummaries.length ? (
+              businessSummaries.map((businessEntry) => (
+                <button
+                  key={businessEntry.id}
+                  type="button"
+                  onClick={() => setSelectedBusinessId(businessEntry.id)}
+                  className={`rounded-[1.5rem] border p-4 text-left transition ${
+                    selectedBusinessId === businessEntry.id
+                      ? "border-cyan-400 bg-cyan-50"
+                      : "border-slate-200 bg-slate-50 hover:border-cyan-300"
+                  }`}
                 >
-                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                    <div>
-                      <p className="font-semibold text-slate-900">
-                        Dette {debt.id.slice(0, 8).toUpperCase()}
-                      </p>
-                      <p className="text-sm text-slate-500">
-                        Echeance {formatDate(debt.dueDate)}
-                      </p>
-                    </div>
-                    <span
-                      className={`rounded-full px-3 py-1 text-xs font-semibold ${statusClasses(
-                        debt.status
-                      )}`}
-                    >
-                      {debtLabels[debt.status]}
-                    </span>
-                  </div>
-
-                  <div className="mt-4 grid gap-3 md:grid-cols-3">
-                    <MiniMetric label="Montant initial" value={formatCurrency(debt.initialAmount)} />
-                    <MiniMetric label="Total paye" value={formatCurrency(debt.totalPaid)} />
-                    <MiniMetric label="Reste" value={formatCurrency(debt.remainingAmount)} />
-                  </div>
-                </div>
+                  <p className="font-semibold text-slate-900">{businessEntry.name}</p>
+                  <p className="text-sm text-slate-500">
+                    {businessEntry.debts.length} dette(s) • {businessEntry.payments.length} paiement(s)
+                  </p>
+                </button>
               ))
             ) : (
-              <EmptyState text="Aucune dette rattachee a ce compte client." />
+              <EmptyState text="Aucun business disponible pour le moment." />
             )}
           </div>
+        </SectionCard>
+
+        <SectionCard
+          title={`Evolution de dette${selectedBusiness ? ` - ${selectedBusiness.name}` : ""}`}
+          subtitle="Etat de votre dette pour le business selectionne."
+        >
+          {selectedBusiness ? (
+            <div className="grid gap-4">
+              <div className="grid gap-3 md:grid-cols-3">
+                <MiniMetric label="Dette totale" value={formatCurrency(selectedBusinessDebtTotal)} />
+                <MiniMetric label="Total paye" value={formatCurrency(selectedBusinessPaidTotal)} />
+                <MiniMetric label="Reste" value={formatCurrency(selectedBusinessRemainingTotal)} />
+              </div>
+
+              <div className="grid gap-3">
+                {selectedBusinessDebts.length ? (
+                  selectedBusinessDebts.map((debt) => (
+                    <div
+                      key={debt.id}
+                      className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4"
+                    >
+                      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                        <div>
+                          <p className="font-semibold text-slate-900">
+                            Dette {debt.id.slice(0, 8).toUpperCase()}
+                          </p>
+                          <p className="text-sm text-slate-500">
+                            Echeance {formatDate(debt.dueDate)}
+                          </p>
+                        </div>
+                        <span
+                          className={`rounded-full px-3 py-1 text-xs font-semibold ${statusClasses(
+                            debt.status
+                          )}`}
+                        >
+                          {debtLabels[debt.status]}
+                        </span>
+                      </div>
+
+                      <div className="mt-4 grid gap-3 md:grid-cols-3">
+                        <MiniMetric label="Montant initial" value={formatCurrency(debt.initialAmount)} />
+                        <MiniMetric label="Total paye" value={formatCurrency(debt.totalPaid)} />
+                        <MiniMetric label="Reste" value={formatCurrency(debt.remainingAmount)} />
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <EmptyState text="Aucune dette pour ce business." />
+                )}
+              </div>
+            </div>
+          ) : (
+            <EmptyState text="Choisissez un business pour voir les details." />
+          )}
         </SectionCard>
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
         <SectionCard
-          title="Historique des paiements"
-          subtitle="Paiements confirmes et synchronises dans l'application."
+          title={`Paiements${selectedBusiness ? ` - ${selectedBusiness.name}` : ""}`}
+          subtitle="Paiements confirmes pour le business selectionne."
         >
           <div className="grid gap-3">
-            {payments.length ? (
-              payments.map((payment) => (
+            {selectedBusinessPayments.length ? (
+              selectedBusinessPayments.map((payment) => (
                 <div
                   key={payment.id}
                   className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4"
@@ -674,18 +769,18 @@ export function ClientDashboardView({
                 </div>
               ))
             ) : (
-              <EmptyState text="Aucun paiement confirme pour ce compte client." />
+              <EmptyState text="Aucun paiement confirme pour ce business." />
             )}
           </div>
         </SectionCard>
 
         <SectionCard
-          title="Historique complet"
-          subtitle="Chronologie des dettes et paiements lies a ce client."
+          title={`Historique complet${selectedBusiness ? ` - ${selectedBusiness.name}` : ""}`}
+          subtitle="Chronologie des dettes et paiements pour le business selectionne."
         >
           <div className="grid gap-3">
-            {clientHistory.length ? (
-              clientHistory.map((entry) => (
+            {selectedBusinessHistory.length ? (
+              selectedBusinessHistory.map((entry) => (
                 <div
                   key={entry.id}
                   className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4"
@@ -719,11 +814,637 @@ export function ClientDashboardView({
                 </div>
               ))
             ) : (
-              <EmptyState text="Aucun historique disponible pour ce client." />
+              <EmptyState text="Aucun historique disponible pour ce business." />
             )}
           </div>
         </SectionCard>
       </div>
+    </div>
+  )
+}
+
+export function SaasDashboardView({
+  businesses,
+  users,
+  clients,
+  plans,
+  subscriptions,
+  subscriptionPayments,
+}: {
+  businesses: Business[]
+  users: User[]
+  clients: Client[]
+  plans: Plan[]
+  subscriptions: Subscription[]
+  subscriptionPayments: SubscriptionPayment[]
+}) {
+  const activeSubscriptions = subscriptions.filter((entry) => entry.status === "active")
+  const platformRevenue = subscriptionPayments
+    .filter((entry) => entry.status === "confirmed")
+    .reduce((sum, entry) => sum + entry.amount, 0)
+  const businessesByStatus = ["active", "trialing", "suspended", "archived"].map((status) => ({
+    status,
+    count: businesses.filter((entry) => entry.status === status).length,
+  }))
+  const subscriptionsExpiringSoon = subscriptions
+    .filter((entry) => entry.expiresAt)
+    .sort((left, right) => String(left.expiresAt).localeCompare(String(right.expiresAt)))
+    .slice(0, 5)
+  const planBreakdown = plans.map((plan) => ({
+    id: plan.id,
+    name: plan.name,
+    businesses: businesses.filter((entry) => entry.plan === plan.id).length,
+    activeSubscriptions: activeSubscriptions.filter((entry) => entry.planId === plan.id).length,
+  }))
+  const latestPayments = subscriptionPayments.slice(0, 5)
+  const getBusinessName = (businessId: string) =>
+    businesses.find((entry) => entry.id === businessId)?.name ?? businessId
+
+  return (
+    <div className="grid gap-6">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <DashboardStatCard label="Entreprises" value={String(businesses.length)} icon={Building2} />
+        <DashboardStatCard label="Utilisateurs" value={String(users.length)} icon={Users} />
+        <DashboardStatCard label="Clients" value={String(clients.length)} icon={Users} />
+        <DashboardStatCard label="Revenus plateforme" value={formatCurrency(platformRevenue)} icon={BadgeDollarSign} />
+        <DashboardStatCard label="Abonnements actifs" value={String(activeSubscriptions.length)} icon={Blocks} />
+      </section>
+
+      <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+        <SectionCard
+          title="Etat de la plateforme"
+          subtitle="Vision super_admin des tenants, plans et abonnements."
+        >
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            {businessesByStatus.map((entry) => (
+              <MiniReportCard
+                key={entry.status}
+                label={`Businesses ${entry.status}`}
+                value={String(entry.count)}
+              />
+            ))}
+          </div>
+        </SectionCard>
+
+        <SectionCard
+          title="Catalogue des plans"
+          subtitle="Chaque business doit rester rattache a un plan SaaS."
+        >
+          <div className="grid gap-3">
+            {planBreakdown.length ? (
+              planBreakdown.map((entry) => (
+                <div
+                  key={entry.id}
+                  className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4"
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="font-semibold">{entry.name}</p>
+                      <p className="text-sm text-slate-500">
+                        {entry.businesses} business(es)
+                      </p>
+                    </div>
+                    <strong>{entry.activeSubscriptions} actif(s)</strong>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <EmptyState text="Aucun plan SaaS charge." />
+            )}
+          </div>
+        </SectionCard>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
+        <SectionCard
+          title="Abonnements a surveiller"
+          subtitle="Expiration, renouvellement et suspension doivent etre pilotes depuis la plateforme."
+        >
+          <div className="grid gap-3">
+            {subscriptionsExpiringSoon.length ? (
+              subscriptionsExpiringSoon.map((entry) => (
+                <div
+                  key={entry.id}
+                  className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4"
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="font-semibold">{getBusinessName(entry.businessId)}</p>
+                      <p className="text-sm text-slate-500">
+                        Plan {entry.planId} • statut {entry.status}
+                      </p>
+                    </div>
+                    <strong>{entry.expiresAt ? formatDate(entry.expiresAt) : "Sans date"}</strong>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <EmptyState text="Aucun abonnement a afficher." />
+            )}
+          </div>
+        </SectionCard>
+
+        <SectionCard
+          title="Paiements SaaS"
+          subtitle="Distincts des paiements de dettes clients."
+        >
+          <div className="grid gap-3">
+            {latestPayments.length ? (
+              latestPayments.map((entry) => (
+                <div
+                  key={entry.id}
+                  className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4"
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="font-semibold">{getBusinessName(entry.businessId)}</p>
+                      <p className="text-sm text-slate-500">
+                        {entry.provider} • {entry.status}
+                      </p>
+                    </div>
+                    <strong>{formatCurrency(entry.amount)}</strong>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <EmptyState text="Aucun paiement d'abonnement disponible." />
+            )}
+          </div>
+        </SectionCard>
+      </div>
+    </div>
+  )
+}
+
+export function SuperAdminBusinessesView({
+  businesses,
+  users,
+  subscriptions,
+  onUpdateBusiness,
+  onCreateBusiness,
+}: {
+  businesses: Business[]
+  users: User[]
+  subscriptions: Subscription[]
+  onUpdateBusiness: (
+    businessId: string,
+    payload: { plan: Business["plan"]; status: Business["status"] }
+  ) => void | Promise<void>
+  onCreateBusiness: (payload: {
+    name: string
+    ownerUid: string
+    plan: Business["plan"]
+    status: Business["status"]
+  }) => void | Promise<void>
+}) {
+  const eligibleOwners = users.filter((user) => user.role !== "client" && user.role !== "super_admin")
+  const [businessName, setBusinessName] = useState("")
+  const [ownerUid, setOwnerUid] = useState(eligibleOwners[0]?.id ?? "")
+  const [plan, setPlan] = useState<Business["plan"]>("free")
+  const [status, setStatus] = useState<Business["status"]>("active")
+
+  return (
+    <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+      <SectionCard
+        title="Entreprises SaaS"
+        subtitle="Pilotage global des businesses, de leur plan et de leur statut."
+      >
+        <form
+          className="mb-6 grid gap-3 rounded-[1.5rem] border border-dashed border-slate-300 bg-white p-4"
+          onSubmit={async (event) => {
+            event.preventDefault()
+            await onCreateBusiness({ name: businessName, ownerUid, plan, status })
+            setBusinessName("")
+            setPlan("free")
+            setStatus("active")
+          }}
+        >
+          <p className="font-semibold text-slate-900">Creer un business</p>
+          <div className="grid gap-3 md:grid-cols-2">
+            <input
+              className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none focus:border-cyan-500"
+              placeholder="Nom du business"
+              value={businessName}
+              onChange={(event) => setBusinessName(event.target.value)}
+            />
+            <select
+              className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none focus:border-cyan-500"
+              value={ownerUid}
+              onChange={(event) => setOwnerUid(event.target.value)}
+            >
+              {eligibleOwners.length ? (
+                eligibleOwners.map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {user.fullName}
+                  </option>
+                ))
+              ) : (
+                <option value="">Aucun utilisateur eligible</option>
+              )}
+            </select>
+            <select
+              className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none focus:border-cyan-500"
+              value={plan}
+              onChange={(event) => setPlan(event.target.value as Business["plan"])}
+            >
+              <option value="free">Free</option>
+              <option value="starter">Starter</option>
+              <option value="pro">Pro</option>
+              <option value="enterprise">Enterprise</option>
+            </select>
+            <select
+              className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none focus:border-cyan-500"
+              value={status}
+              onChange={(event) => setStatus(event.target.value as Business["status"])}
+            >
+              <option value="active">Active</option>
+              <option value="trialing">Trialing</option>
+              <option value="suspended">Suspended</option>
+              <option value="archived">Archived</option>
+            </select>
+          </div>
+          <div className="flex justify-end">
+            <Button
+              type="submit"
+              className="rounded-2xl bg-slate-950 text-white hover:bg-slate-900"
+              disabled={!businessName.trim() || !ownerUid}
+            >
+              Creer le business
+            </Button>
+          </div>
+        </form>
+
+        <div className="grid gap-4">
+          {businesses.length ? (
+            businesses.map((business) => {
+              const owner = users.find((user) => user.id === business.ownerUid)
+              const subscription = subscriptions.find((entry) => entry.businessId === business.id)
+
+              return (
+                <div
+                  key={business.id}
+                  className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4"
+                >
+                  <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                    <div>
+                      <p className="font-semibold text-slate-900">{business.name}</p>
+                      <p className="text-sm text-slate-500">
+                        {business.id} • owner {owner?.fullName ?? business.ownerUid}
+                      </p>
+                      <p className="mt-2 text-sm text-cyan-700">
+                        Subscription {subscription?.status ?? "non configuree"}
+                      </p>
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <select
+                        className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none focus:border-cyan-500"
+                        value={business.plan}
+                        onChange={(event) =>
+                          onUpdateBusiness(business.id, {
+                            plan: event.target.value as Business["plan"],
+                            status: business.status,
+                          })
+                        }
+                      >
+                        <option value="free">Free</option>
+                        <option value="starter">Starter</option>
+                        <option value="pro">Pro</option>
+                        <option value="enterprise">Enterprise</option>
+                      </select>
+                      <select
+                        className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none focus:border-cyan-500"
+                        value={business.status}
+                        onChange={(event) =>
+                          onUpdateBusiness(business.id, {
+                            plan: business.plan,
+                            status: event.target.value as Business["status"],
+                          })
+                        }
+                      >
+                        <option value="active">Active</option>
+                        <option value="suspended">Suspended</option>
+                        <option value="trialing">Trialing</option>
+                        <option value="archived">Archived</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )
+            })
+          ) : (
+            <EmptyState text="Aucune entreprise disponible." />
+          )}
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title="Synthese plateforme"
+        subtitle="Indicateurs rapides pour l'administration centrale."
+      >
+        <div className="grid gap-4">
+          <MiniReportCard label="Entreprises" value={String(businesses.length)} />
+          <MiniReportCard label="Owners" value={String(users.filter((user) => user.role === "owner").length)} />
+          <MiniReportCard
+            label="Businesses suspendus"
+            value={String(businesses.filter((business) => business.status === "suspended").length)}
+          />
+          <MiniReportCard
+            label="Businesses actifs"
+            value={String(businesses.filter((business) => business.status === "active").length)}
+          />
+        </div>
+      </SectionCard>
+    </div>
+  )
+}
+
+export function SuperAdminUsersView({
+  users,
+  businesses,
+  onUpdateUserRole,
+  onToggleUserActive,
+  onAssignUserBusiness,
+}: {
+  users: User[]
+  businesses: Business[]
+  onUpdateUserRole: (userId: string, role: UserRole) => void | Promise<void>
+  onToggleUserActive: (userId: string, isActive: boolean) => void | Promise<void>
+  onAssignUserBusiness: (userId: string, businessId: string) => void | Promise<void>
+}) {
+  const visibleUsers = [...users].sort((left, right) => left.fullName.localeCompare(right.fullName))
+  const activeUsers = visibleUsers.filter((user) => user.isActive)
+  const clientUsers = visibleUsers.filter((user) => user.role === "client")
+
+  return (
+    <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+      <SectionCard
+        title="Tous les utilisateurs"
+        subtitle="Vision plateforme des comptes, roles et rattachements business."
+      >
+        <div className="mb-5 grid gap-4 md:grid-cols-3">
+          <MiniReportCard label="Utilisateurs" value={String(visibleUsers.length)} />
+          <MiniReportCard label="Actifs" value={String(activeUsers.length)} />
+          <MiniReportCard label="Clients" value={String(clientUsers.length)} />
+        </div>
+
+        <div className="grid gap-3">
+          {visibleUsers.length ? (
+            visibleUsers.map((user) => {
+              const business = user.businessId
+                ? businesses.find((entry) => entry.id === user.businessId)
+                : undefined
+
+              return (
+                <div
+                  key={user.id}
+                  className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4"
+                >
+                  <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                    <div>
+                      <p className="font-semibold text-slate-900">{user.fullName}</p>
+                      <p className="text-sm text-slate-500">{user.email}</p>
+                      <p className="mt-2 text-sm text-cyan-700">
+                        {business ? business.name : user.role === "client" ? "Compte client" : "Aucun business"}
+                      </p>
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <select
+                        className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none focus:border-cyan-500"
+                        value={user.role}
+                        onChange={(event) =>
+                          onUpdateUserRole(user.id, event.target.value as UserRole)
+                        }
+                      >
+                        {(["super_admin", "owner", "manager", "seller", "client"] as const).map((role) => (
+                          <option key={role} value={role}>
+                            {roleLabels[role]}
+                          </option>
+                        ))}
+                      </select>
+                      <Button
+                        type="button"
+                        variant={user.isActive ? "outline" : "default"}
+                        className={`rounded-2xl ${
+                          user.isActive ? "border-slate-300" : "bg-slate-950 text-white hover:bg-slate-900"
+                        }`}
+                        onClick={() => onToggleUserActive(user.id, !user.isActive)}
+                      >
+                        {user.isActive ? "Desactiver" : "Reactiver"}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {user.role !== "client" && user.role !== "super_admin" ? (
+                    <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center">
+                      <select
+                        className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none focus:border-cyan-500 md:min-w-64"
+                        value={user.businessId ?? ""}
+                        onChange={(event) => onAssignUserBusiness(user.id, event.target.value)}
+                      >
+                        <option value="" disabled>
+                          Choisir un business
+                        </option>
+                        {businesses.map((business) => (
+                          <option key={business.id} value={business.id}>
+                            {business.name}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-sm text-slate-500">
+                        Business actuel: {business?.name ?? "Aucun"}
+                      </p>
+                    </div>
+                  ) : null}
+                </div>
+              )
+            })
+          ) : (
+            <EmptyState text="Aucun utilisateur disponible." />
+          )}
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title="Synthese utilisateurs"
+        subtitle="Repartition par role sur l'ensemble de la plateforme."
+      >
+        <div className="grid gap-4">
+          <MiniReportCard
+            label="Super admins"
+            value={String(visibleUsers.filter((user) => user.role === "super_admin").length)}
+          />
+          <MiniReportCard
+            label="Owners"
+            value={String(visibleUsers.filter((user) => user.role === "owner").length)}
+          />
+          <MiniReportCard
+            label="Managers"
+            value={String(visibleUsers.filter((user) => user.role === "manager").length)}
+          />
+          <MiniReportCard
+            label="Vendeurs"
+            value={String(
+              visibleUsers.filter((user) => ["seller", "vendeur"].includes(user.role)).length
+            )}
+          />
+          <MiniReportCard
+            label="Sans business"
+            value={String(
+              visibleUsers.filter((user) => user.role !== "client" && !user.businessId).length
+            )}
+          />
+        </div>
+      </SectionCard>
+    </div>
+  )
+}
+
+export function SuperAdminSubscriptionsView({
+  subscriptions,
+  businesses,
+  subscriptionPayments,
+  onUpdateSubscriptionStatus,
+  onCreateSubscription,
+}: {
+  subscriptions: Subscription[]
+  businesses: Business[]
+  subscriptionPayments: SubscriptionPayment[]
+  onUpdateSubscriptionStatus: (
+    subscriptionId: string,
+    status: Subscription["status"]
+  ) => void | Promise<void>
+  onCreateSubscription: (
+    payload: {
+      businessId: string
+      planId: Subscription["planId"]
+      status: Subscription["status"]
+    }
+  ) => void | Promise<void>
+}) {
+  const businessesWithoutSubscription = businesses.filter(
+    (business) => !subscriptions.some((entry) => entry.businessId === business.id)
+  )
+
+  return (
+    <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+      <SectionCard
+        title="Abonnements SaaS"
+        subtitle="Gestion des renouvellements, suspensions et statuts d'abonnement."
+      >
+        <div className="grid gap-4">
+          {subscriptions.length ? (
+            subscriptions.map((subscription) => {
+              const business = businesses.find((entry) => entry.id === subscription.businessId)
+
+              return (
+                <div
+                  key={subscription.id}
+                  className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4"
+                >
+                  <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                    <div>
+                      <p className="font-semibold text-slate-900">
+                        {business?.name ?? subscription.businessId}
+                      </p>
+                      <p className="text-sm text-slate-500">
+                        Plan {subscription.planId} • demarre le {formatDate(subscription.startedAt)}
+                      </p>
+                      <p className="mt-2 text-sm text-cyan-700">
+                        Expire {subscription.expiresAt ? formatDate(subscription.expiresAt) : "non defini"}
+                      </p>
+                    </div>
+                    <select
+                      className="h-11 rounded-2xl border border-slate-200 bg-white px-4 outline-none focus:border-cyan-500"
+                      value={subscription.status}
+                      onChange={(event) =>
+                        onUpdateSubscriptionStatus(
+                          subscription.id,
+                          event.target.value as Subscription["status"]
+                        )
+                      }
+                    >
+                      <option value="trialing">Trialing</option>
+                      <option value="active">Active</option>
+                      <option value="past_due">Past due</option>
+                      <option value="expired">Expired</option>
+                      <option value="suspended">Suspended</option>
+                      <option value="cancelled">Cancelled</option>
+                    </select>
+                  </div>
+                </div>
+              )
+            })
+          ) : (
+            <EmptyState text="Aucun abonnement disponible." />
+          )}
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title="Creation et paiements"
+        subtitle="Creation rapide des abonnements manquants et suivi des paiements SaaS."
+      >
+        <div className="mb-6 grid gap-3">
+          {businessesWithoutSubscription.length ? (
+            businessesWithoutSubscription.map((business) => (
+              <div
+                key={business.id}
+                className="flex flex-col gap-3 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4 md:flex-row md:items-center md:justify-between"
+              >
+                <div>
+                  <p className="font-semibold">{business.name}</p>
+                  <p className="text-sm text-slate-500">
+                    Aucun abonnement actif pour {business.name}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  className="rounded-2xl bg-slate-950 text-white hover:bg-slate-900"
+                  onClick={() =>
+                    onCreateSubscription({
+                      businessId: business.id,
+                      planId: business.plan,
+                      status: business.status === "active" ? "active" : "trialing",
+                    })
+                  }
+                >
+                  Creer abonnement
+                </Button>
+              </div>
+            ))
+          ) : (
+            <EmptyState text="Chaque business possede deja un abonnement." />
+          )}
+        </div>
+
+        <div className="grid gap-3">
+          {subscriptionPayments.length ? (
+            subscriptionPayments.map((payment) => (
+              <div
+                key={payment.id}
+                className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4"
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="font-semibold">
+                      {businesses.find((entry) => entry.id === payment.businessId)?.name ??
+                        payment.businessId}
+                    </p>
+                    <p className="text-sm text-slate-500">
+                      {payment.provider} • {payment.status}
+                    </p>
+                  </div>
+                  <strong>{formatCurrency(payment.amount)}</strong>
+                </div>
+              </div>
+            ))
+          ) : (
+            <EmptyState text="Aucun paiement d'abonnement." />
+          )}
+        </div>
+      </SectionCard>
     </div>
   )
 }
@@ -750,6 +1471,7 @@ function DashboardStatCard({
 
 export function ClientsView({
   clients,
+  businesses,
   users,
   sales,
   payments,
@@ -758,6 +1480,7 @@ export function ClientsView({
   onDelete,
 }: {
   clients: Client[]
+  businesses: Business[]
   users: User[]
   sales: {
     id: string
@@ -797,9 +1520,33 @@ export function ClientsView({
     address: "",
     notes: "",
   })
-  const userEmailOptions = [...users]
-    .filter((user) => Boolean(user.email))
+  const emailOptions = [
+    ...users
+      .filter((user) => Boolean(user.email))
+      .map((user) => ({
+        key: `user-${user.id}`,
+        email: user.email,
+        label: `${user.email} - ${user.fullName} (${user.role})`,
+      })),
+    ...clients
+      .filter((client) => Boolean(client.email))
+      .map((client) => ({
+        key: `client-${client.id}`,
+        email: client.email ?? "",
+        label: `${client.email} - ${client.fullName} (client)`,
+      })),
+  ]
+    .filter(
+      (entry, index, collection) =>
+        collection.findIndex((candidate) => candidate.email === entry.email) === index
+    )
     .sort((left, right) => left.email.localeCompare(right.email))
+  const visibleBusinesses = Array.from(
+    new Set(clients.map((client) => client.businessId).filter(Boolean))
+  )
+    .map((businessId) => businesses.find((business) => business.id === businessId))
+    .filter((business): business is Business => Boolean(business))
+    .sort((left, right) => left.name.localeCompare(right.name))
 
   const clientSummaries = clients
     .map((client) => {
@@ -914,6 +1661,29 @@ export function ClientsView({
     <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
       <div className="grid gap-6">
         <SectionCard
+          title="Businesses visibles"
+          subtitle="Businesses rattaches aux clients affiches dans cet espace."
+        >
+          <div className="grid gap-3 md:grid-cols-2">
+            {visibleBusinesses.length ? (
+              visibleBusinesses.map((business) => (
+                <div
+                  key={business.id}
+                  className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4"
+                >
+                  <p className="font-semibold text-slate-900">{business.name}</p>
+                  <p className="text-sm text-slate-500">
+                    {clients.filter((client) => client.businessId === business.id).length} client(s)
+                  </p>
+                </div>
+              ))
+            ) : (
+              <EmptyState text="Aucun business visible dans cette section." />
+            )}
+          </div>
+        </SectionCard>
+
+        <SectionCard
           title="Synthese clients"
           subtitle="Vue dynamique du portefeuille clients et des encours."
         >
@@ -957,9 +1727,9 @@ export function ClientsView({
                 }
               >
                 <option value="">Aucun compte associe pour le moment</option>
-                {userEmailOptions.map((user) => (
-                  <option key={user.id} value={user.email}>
-                    {user.email} - {user.fullName} ({user.role})
+                {emailOptions.map((entry) => (
+                  <option key={entry.key} value={entry.email}>
+                    {entry.label}
                   </option>
                 ))}
               </select>
@@ -1140,12 +1910,14 @@ export function ClientsView({
 }
 
 export function ProductsView({
+  currentUser,
   products,
   stockMovements,
   onCreate,
   onUpdate,
   onDelete,
 }: {
+  currentUser: User
   products: Product[]
   stockMovements: {
     id: string
@@ -1176,7 +1948,15 @@ export function ProductsView({
     status: "active",
   })
 
-  const filteredProducts = products.filter((product) =>
+  const visibleProducts =
+    currentUser.role === "super_admin"
+      ? products
+      : products.filter((product) => product.businessId === currentUser.businessId)
+  const visibleProductIds = new Set(visibleProducts.map((product) => product.id))
+  const visibleStockMovements = stockMovements.filter((movement) =>
+    visibleProductIds.has(movement.productId)
+  )
+  const filteredProducts = visibleProducts.filter((product) =>
     `${product.name} ${product.description}`.toLowerCase().includes(search.toLowerCase())
   )
 
@@ -1249,7 +2029,7 @@ export function ProductsView({
 
         <SectionCard title="Mouvements de stock" subtitle="Historique simplifie des entrees et sorties detectees.">
           <div className="grid gap-3">
-            {stockMovements.slice(0, 8).map((movement) => (
+            {visibleStockMovements.slice(0, 8).map((movement) => (
               <div key={movement.id} className="flex flex-col gap-2 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4 md:flex-row md:items-center md:justify-between">
                 <div>
                   <p className="font-semibold">{movement.productName}</p>
@@ -1270,11 +2050,13 @@ export function ProductsView({
 }
 
 export function SalesView({
+  currentUser,
   clients,
   products,
   sales,
   onCreate,
 }: {
+  currentUser: User
   clients: Client[]
   products: Product[]
   sales: {
@@ -1289,14 +2071,28 @@ export function SalesView({
   }[]
   onCreate: (payload: SaleInput) => void
 }) {
+  const availableClients =
+    currentUser.role === "super_admin"
+      ? clients
+      : clients.filter((client) => client.businessId === currentUser.businessId)
+
   const [form, setForm] = useState<SaleInput>({
-    clientId: clients[0]?.id ?? "",
+    clientId: availableClients[0]?.id ?? "",
     saleDate: todayIsoDate(),
     paymentType: "cash",
     initialPaid: 0,
     notes: "",
     items: [{ productId: products[0]?.id ?? "", quantity: 1 }],
   })
+
+  useEffect(() => {
+    if (!form.clientId || !availableClients.some((client) => client.id === form.clientId)) {
+      setForm((current) => ({
+        ...current,
+        clientId: availableClients[0]?.id ?? "",
+      }))
+    }
+  }, [availableClients, form.clientId])
 
   const computedItems = form.items.map((item) => {
     const product = products.find((entry) => entry.id === item.productId)
@@ -1311,7 +2107,7 @@ export function SalesView({
     event.preventDefault()
     onCreate({ ...form, initialPaid, items: form.items.filter((item) => item.productId && item.quantity > 0) })
     setForm({
-      clientId: clients[0]?.id ?? "",
+      clientId: availableClients[0]?.id ?? "",
       saleDate: todayIsoDate(),
       paymentType: "cash",
       initialPaid: 0,
@@ -1327,7 +2123,7 @@ export function SalesView({
           <div className="grid gap-4 md:grid-cols-2">
             <Field label="Client">
               <select className="h-11 rounded-2xl border border-slate-200 bg-slate-50 px-4 outline-none focus:border-cyan-500" value={form.clientId} onChange={(event) => setForm((current) => ({ ...current, clientId: event.target.value }))}>
-                {clients.map((client) => <option key={client.id} value={client.id}>{client.fullName}</option>)}
+                {availableClients.map((client) => <option key={client.id} value={client.id}>{client.fullName}</option>)}
               </select>
             </Field>
             <Field label="Date de vente"><input type="date" className="h-11 rounded-2xl border border-slate-200 bg-slate-50 px-4 outline-none focus:border-cyan-500" value={form.saleDate} onChange={(event) => setForm((current) => ({ ...current, saleDate: event.target.value }))} /></Field>

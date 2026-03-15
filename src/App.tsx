@@ -17,7 +17,11 @@ import {
   PaymentsView,
   ProductsView,
   ReportsView,
+  SaasDashboardView,
   SalesView,
+  SuperAdminBusinessesView,
+  SuperAdminSubscriptionsView,
+  SuperAdminUsersView,
 } from "@/components/app/views"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -31,6 +35,8 @@ function App() {
   const [screen, setScreen] = useState<ScreenId>("dashboard")
   const [authMode, setAuthMode] = useState<"login" | "register">("login")
   const [registerName, setRegisterName] = useState("")
+  const [registerAccountType, setRegisterAccountType] = useState<"client" | "owner">("owner")
+  const [registerBusinessName, setRegisterBusinessName] = useState("")
   const [loginEmail, setLoginEmail] = useState("admin@marchervente.app")
   const [loginPassword, setLoginPassword] = useState("admin123")
   const [authBusy, setAuthBusy] = useState(false)
@@ -62,6 +68,8 @@ function App() {
     (sum, debt) => sum + (debt.status === "paid" ? 0 : debt.remainingAmount),
     0
   )
+  const platformRevenue = app.subscriptionPayments.reduce((sum, entry) => sum + entry.amount, 0)
+  const activeSubscriptions = app.subscriptions.filter((entry) => entry.status === "active")
   const salesToday = app.sales.filter((sale) => sale.saleDate === todayIsoDate())
   const dashboardDebtors = [...app.debts]
     .filter((debt) => debt.status !== "paid")
@@ -71,6 +79,19 @@ function App() {
     app.currentUser?.role === "client" && app.currentUser.clientId
       ? app.clients.find((client) => client.id === app.currentUser?.clientId)
       : undefined
+  const currentBusiness =
+    app.currentUser?.businessId
+      ? app.businesses.find((business) => business.id === app.currentUser?.businessId)
+      : undefined
+  const ownedBusinesses =
+    app.currentUser?.role === "owner"
+      ? app.businesses
+          .filter((business) => business.ownerUid === app.currentUser?.id)
+          .sort((left, right) => left.name.localeCompare(right.name))
+      : currentBusiness
+        ? [currentBusiness]
+        : []
+  const ownedBusinessNames = ownedBusinesses.map((business) => business.name)
 
   function pushToast(type: ToastItem["type"], title: string, message: string) {
     const id = crypto.randomUUID()
@@ -103,8 +124,20 @@ function App() {
     setAuthBusy(true)
     try {
       if (authMode === "register") {
-        await app.register(registerName, loginEmail, loginPassword)
-        pushToast("success", "Compte cree", "Inscription reussie et session ouverte.")
+        await app.register(
+          registerName,
+          loginEmail,
+          loginPassword,
+          registerAccountType,
+          registerBusinessName
+        )
+        pushToast(
+          "success",
+          "Compte cree",
+          registerAccountType === "owner"
+            ? "Compte commerce et business crees avec succes."
+            : "Inscription reussie et session ouverte."
+        )
       } else {
         await app.login(loginEmail, loginPassword)
         pushToast("success", "Connexion reussie", "Bienvenue dans l'application.")
@@ -176,6 +209,8 @@ function App() {
         <AuthScreen
           authMode={authMode}
           registerName={registerName}
+          registerAccountType={registerAccountType}
+          registerBusinessName={registerBusinessName}
           loginEmail={loginEmail}
           loginPassword={loginPassword}
           loginError={loginError}
@@ -186,6 +221,8 @@ function App() {
             setLoginError("")
           }}
           onRegisterNameChange={setRegisterName}
+          onRegisterAccountTypeChange={setRegisterAccountType}
+          onRegisterBusinessNameChange={setRegisterBusinessName}
           onEmailChange={setLoginEmail}
           onPasswordChange={setLoginPassword}
           onSubmit={handleAuthSubmit}
@@ -227,6 +264,8 @@ function App() {
             </div>
             <SidebarContent
               currentUser={app.currentUser}
+              currentBusinessName={currentBusiness?.name}
+              businessNames={ownedBusinessNames}
               availableNavigation={availableNavigation}
               screen={screen}
               onScreenChange={handleScreenChange}
@@ -240,6 +279,8 @@ function App() {
         <aside className="hidden border-r border-white/10 bg-slate-950 text-white shadow-[0_35px_90px_-60px_rgba(15,23,42,0.95)] lg:fixed lg:inset-y-0 lg:left-0 lg:z-40 lg:flex lg:w-80 lg:flex-col">
           <SidebarContent
             currentUser={app.currentUser}
+            currentBusinessName={currentBusiness?.name}
+            businessNames={ownedBusinessNames}
             availableNavigation={availableNavigation}
             screen={screen}
             onScreenChange={handleScreenChange}
@@ -262,6 +303,11 @@ function App() {
               <p className="text-sm font-semibold text-slate-900">
                 {app.currentUser.fullName}
               </p>
+              {ownedBusinessNames.length ? (
+                <p className="text-xs font-medium text-slate-500">
+                  {ownedBusinessNames.join(" • ")}
+                </p>
+              ) : null}
               <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">
                 {app.currentUser.role}
               </p>
@@ -274,23 +320,38 @@ function App() {
                 <p className="text-sm font-semibold uppercase tracking-[0.25em] text-cyan-700">
                   Tableau de gestion
                 </p>
+                {ownedBusinessNames.length ? (
+                  <p className="mt-2 text-sm font-medium text-slate-500">
+                    {ownedBusinessNames.join(" • ")}
+                  </p>
+                ) : null}
                 <h1 className="mt-2 text-3xl font-semibold tracking-tight">
                   {screenTitles[screen]}
                 </h1>
               </div>
 
               <div className="grid gap-3 sm:grid-cols-3">
-                <StatBadge label="Clients" value={String(app.clients.length)} />
-                <StatBadge
-                  label="Ventes du jour"
-                  value={formatCurrency(
-                    salesToday.reduce((sum, sale) => sum + sale.totalAmount, 0)
-                  )}
-                />
-                <StatBadge
-                  label="Dettes ouvertes"
-                  value={formatCurrency(totalDebtOpen)}
-                />
+                {app.currentUser.role === "super_admin" ? (
+                  <>
+                    <StatBadge label="Entreprises" value={String(app.businesses.length)} />
+                    <StatBadge label="Abonnements actifs" value={String(activeSubscriptions.length)} />
+                    <StatBadge label="Revenus SaaS" value={formatCurrency(platformRevenue)} />
+                  </>
+                ) : (
+                  <>
+                    <StatBadge label="Clients" value={String(app.clients.length)} />
+                    <StatBadge
+                      label="Ventes du jour"
+                      value={formatCurrency(
+                        salesToday.reduce((sum, sale) => sum + sale.totalAmount, 0)
+                      )}
+                    />
+                    <StatBadge
+                      label="Dettes ouvertes"
+                      value={formatCurrency(totalDebtOpen)}
+                    />
+                  </>
+                )}
               </div>
             </div>
           </header>
@@ -316,6 +377,16 @@ function App() {
                 client={currentClient}
                 debts={app.debts}
                 payments={app.payments}
+                businesses={app.businesses}
+              />
+            ) : app.currentUser.role === "super_admin" ? (
+              <SaasDashboardView
+                businesses={app.businesses}
+                users={app.manageableUsers}
+                clients={app.clients}
+                plans={app.plans}
+                subscriptions={app.subscriptions}
+                subscriptionPayments={app.subscriptionPayments}
               />
             ) : (
               <DashboardView
@@ -354,6 +425,7 @@ function App() {
           {screen === "clients" ? (
             <ClientsView
               clients={app.clients}
+              businesses={app.businesses}
               users={app.users}
               sales={app.sales}
               payments={app.payments}
@@ -384,8 +456,91 @@ function App() {
             />
           ) : null}
 
+          {screen === "businesses" ? (
+            <SuperAdminBusinessesView
+              businesses={app.businesses}
+              users={app.manageableUsers}
+              subscriptions={app.subscriptions}
+              onCreateBusiness={async (payload) => {
+                try {
+                  await app.createBusiness(payload)
+                  showSuccess("Business cree", "Le business a ete ajoute et son owner rattache.")
+                } catch (error) {
+                  showError(error)
+                }
+              }}
+              onUpdateBusiness={async (businessId, payload) => {
+                try {
+                  await app.updateBusinessSettings(businessId, payload)
+                  showSuccess("Entreprise mise a jour", "Le plan ou le statut a ete modifie.")
+                } catch (error) {
+                  showError(error)
+                }
+              }}
+            />
+          ) : null}
+
+          {screen === "platform_users" ? (
+            <SuperAdminUsersView
+              users={app.manageableUsers}
+              businesses={app.businesses}
+              onAssignUserBusiness={async (userId, businessId) => {
+                try {
+                  await app.assignUserToBusiness(userId, businessId)
+                  showSuccess("Utilisateur rattache", "Le compte a ete associe au business.")
+                } catch (error) {
+                  showError(error)
+                }
+              }}
+              onUpdateUserRole={async (userId, role) => {
+                try {
+                  await app.updateUserRole(userId, role)
+                  showSuccess("Role mis a jour", "Le role utilisateur a ete modifie.")
+                } catch (error) {
+                  showError(error)
+                }
+              }}
+              onToggleUserActive={async (userId, isActive) => {
+                try {
+                  await app.toggleUserActive(userId, isActive)
+                  showSuccess(
+                    isActive ? "Compte reactive" : "Compte desactive",
+                    "Le statut utilisateur a ete mis a jour."
+                  )
+                } catch (error) {
+                  showError(error)
+                }
+              }}
+            />
+          ) : null}
+
+          {screen === "subscriptions" ? (
+            <SuperAdminSubscriptionsView
+              subscriptions={app.subscriptions}
+              businesses={app.businesses}
+              subscriptionPayments={app.subscriptionPayments}
+              onCreateSubscription={async (payload) => {
+                try {
+                  await app.createSubscription(payload)
+                  showSuccess("Abonnement cree", "L'abonnement SaaS a ete initialise.")
+                } catch (error) {
+                  showError(error)
+                }
+              }}
+              onUpdateSubscriptionStatus={async (subscriptionId, status) => {
+                try {
+                  await app.updateSubscriptionStatus(subscriptionId, status)
+                  showSuccess("Abonnement mis a jour", "Le statut de l'abonnement a ete modifie.")
+                } catch (error) {
+                  showError(error)
+                }
+              }}
+            />
+          ) : null}
+
           {screen === "products" ? (
             <ProductsView
+              currentUser={app.currentUser}
               products={app.products}
               stockMovements={app.stockMovements}
               onCreate={async (payload) => {
@@ -417,6 +572,7 @@ function App() {
 
           {screen === "sales" ? (
             <SalesView
+              currentUser={app.currentUser}
               clients={app.clients}
               products={app.products}
               sales={app.sales}
@@ -473,6 +629,8 @@ function App() {
 
 function SidebarContent({
   currentUser,
+  currentBusinessName,
+  businessNames,
   availableNavigation,
   screen,
   onScreenChange,
@@ -480,6 +638,8 @@ function SidebarContent({
   desktop = false,
 }: {
   currentUser: User
+  currentBusinessName?: string
+  businessNames: string[]
   availableNavigation: NavItem[]
   screen: ScreenId
   onScreenChange: (screen: ScreenId) => void
@@ -496,6 +656,17 @@ function SidebarContent({
         <p className="mt-3 text-sm leading-6 text-slate-300">
           {currentUser.fullName}
           <br />
+          {businessNames.length ? (
+            <>
+              <span className="text-slate-400">{businessNames.join(" • ")}</span>
+              <br />
+            </>
+          ) : currentBusinessName ? (
+            <>
+              <span className="text-slate-400">{currentBusinessName}</span>
+              <br />
+            </>
+          ) : null}
           <span className="text-cyan-300">{currentUser.role}</span>
         </p>
       </div>
